@@ -106,7 +106,7 @@ export default function Home() {
             </span>
           </div>
           <div className="flex items-center gap-4 text-xs text-muted">
-            <span className="hidden sm:inline">Gemini Flash · Free tier</span>
+            <span className="hidden sm:inline">Gemini 2.5 Flash · Free tier</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Live
@@ -291,7 +291,7 @@ export default function Home() {
             {" · "}Built for writers, not robots
           </span>
           <span className="text-xs text-muted/40">
-            Powered by Gemini Flash
+            Powered by Gemini 2.5 Flash
           </span>
         </div>
       </footer>
