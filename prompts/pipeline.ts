@@ -1,165 +1,212 @@
 export type HumanizeMode = "light" | "medium" | "aggressive";
 
-// Subtle per-chunk rhythm hints — applied to structural pass.
-// Vary by index so adjacent chunks get different micro-instructions,
-// producing natural local inconsistency across the document.
+// ─── Per-chunk variation hints ───────────────────────────────────────────────
+// Applied by chunk index so adjacent chunks receive different micro-instructions.
+// This introduces natural local inconsistency across the document.
+
 const STRUCTURAL_HINTS = [
   "Open this section with a short, direct sentence.",
-  "Let this section have at least one long, detailed sentence.",
-  "Keep this section punchy — shorter sentences work well here.",
-  "This section can flow more freely — longer sentences are fine.",
-  "Vary the rhythm here more than usual.",
-  "Make the first sentence of this section rhythmically distinct from the last.",
+  "Let this section have at least one noticeably long sentence.",
+  "Keep this section punchy — shorter sentences suit this part.",
+  "This section can flow freely — longer sentences are fine here.",
+  "Vary the rhythm here more than the surrounding sections.",
+  "Make the first and last sentence of this section feel rhythmically different.",
 ];
 
-// Subtle per-chunk voice hints — applied to semantic pass.
 const SEMANTIC_HINTS = [
-  "The opening here can be a touch more direct.",
-  "Slightly more concrete language than usual fits this section.",
-  "A relaxed, conversational turn of phrase works here.",
-  "Keep this section crisp — no hedging.",
-  "Let this section breathe slightly — a shade more reflective.",
-  "Make the language here feel natural and unpolished.",
+  "The opening can be a touch more direct than usual.",
+  "Concrete, specific language fits this section better than abstract phrasing.",
+  "A slightly more relaxed turn of phrase is appropriate here.",
+  "Keep this section crisp. No hedging, no softening.",
+  "This section can be slightly more reflective in tone.",
+  "The language here should feel natural and unpolished — not optimized.",
 ];
 
-// ─── Pass 1: Structural Rewrite ────────────────────────────────────────────
-// Focuses purely on sentence rhythm and syntax — not word choices or meaning.
-// Goal: break the uniform length + parallel structure AI produces by default.
+// ─── Pass 1: Structural Rewrite ──────────────────────────────────────────────
+// Single responsibility: sentence rhythm and syntax only.
+// Does NOT touch word choices, phrases, or meaning.
 export function getStructuralPrompt(
   text: string,
   mode: HumanizeMode,
   chunkIndex?: number
 ): string {
-  const scope = {
+  const scope: Record<HumanizeMode, string> = {
     light:
-      "Light touch only — fix 2-3 sentences that are rhythmically identical to their neighbors. Everything else stays.",
+      "Minimal — find 2-3 sentences that are rhythmically identical to their neighbors and fix only those. Leave everything else alone.",
     medium:
-      "Moderate rework — vary sentence lengths throughout. Some short, some long. Break the rhythm lock AI writing has.",
+      "Moderate — vary sentence lengths across the whole section. Aim for a clear mix: some under 12 words, some over 25. Break the uniform medium-length pattern.",
     aggressive:
-      "Full structural disruption — the text must not have two consecutive sentences with the same rhythmic shape. Vary aggressively.",
-  }[mode];
+      "Aggressive — no two consecutive sentences should share the same rhythmic shape (similar word count + similar structure). Vary every sentence against its neighbor.",
+  };
 
   const hint =
     chunkIndex !== undefined
-      ? `\nSECTION NOTE: ${STRUCTURAL_HINTS[chunkIndex % STRUCTURAL_HINTS.length]}`
+      ? `\nSECTION FOCUS: ${STRUCTURAL_HINTS[chunkIndex % STRUCTURAL_HINTS.length]}`
       : "";
 
-  return `You are a structural copy editor. Your only job right now is sentence rhythm and structure — not word choices, not meaning, not style.
+  return `You are a structural copy editor. Your only task is sentence rhythm and syntax. Do not touch word choices, phrases, or meaning.
 
-TASK: Rewrite the text below to break its structural uniformity.
+TASK: Restructure the sentences below so they no longer sound uniform and machine-generated.
 
-SCOPE: ${scope}${hint}
+SCOPE: ${scope[mode]}${hint}
 
 WHAT TO DO:
-- Vary sentence lengths. AI writes uniformly (all medium). Mix short punchy sentences with long flowing ones.
-- Break compound sentences that list clauses in parallel ("X does A, Y does B, Z does C").
-- Merge short consecutive sentences when they belong together naturally.
-- Vary sentence openings so no two consecutive sentences start with the same word or structure.
-- If paragraphs are all the same length, redistribute their weight — make some denser, some lighter.
+- Vary sentence lengths drastically. AI writes all sentences at similar word counts. Break that — some sentences should be short (under 12 words), some long (25+).
+- Split compound sentences that chain parallel clauses: "X does A, Y does B, and Z does C" — split or restructure these.
+- Merge short choppy sentences that belong together into one longer flowing sentence.
+- Vary sentence-opening structure. Never start two consecutive sentences with the same word or the same grammatical pattern (Subject-Verb, Subject-Verb, Subject-Verb is a red flag).
+- If multiple paragraphs are the same visual weight, redistribute — make some dense, some light.
+
+FORBIDDEN PATTERNS (these are AI tells — do not produce them):
+- Two consecutive sentences with similar word counts (e.g. 22 words, then 21 words, then 23 words).
+- Parallel list-like sentence triplets: "First, X. Second, Y. Third, Z."
+- Compound sentences with symmetric halves: "While A does X, B does Y."
+- Paragraphs where every sentence follows Subject + Verb + Object structure.
+- Identical or near-identical sentence rhythms across an entire paragraph.
 
 WHAT NOT TO DO:
-- Do not change vocabulary or word choices unless structurally forced.
-- Do not replace phrases, idioms, or expressions.
-- Do not alter any facts, arguments, or meaning.
-- Do not add new ideas or remove existing ones.
-- Do not over-rewrite — only touch what has a structural problem.
+- Do not change any vocabulary, word choices, or phrases unless structurally forced.
+- Do not replace expressions, idioms, or terminology.
+- Do not alter facts, arguments, or meaning in any way.
+- Do not add ideas or remove ideas.
 
 OUTPUT:
-- Output only the rewritten text. No preamble, no labels, no commentary.
+- Output only the rewritten text. No preamble, no labels, no meta-commentary.
 - Match word count within ±15%.
-- Preserve all paragraph breaks.
+- Preserve all paragraph breaks exactly.
 
 TEXT:
 ${text}`;
 }
 
-// ─── Pass 2: Semantic Naturalness ──────────────────────────────────────────
-// Runs after structure is fixed. Focuses on voice, word choices, transitions.
-// Goal: replace AI-phrasing without restructuring what pass 1 already shaped.
+// ─── Pass 2: Semantic Naturalness ────────────────────────────────────────────
+// Runs after structure is fixed. Single responsibility: word choices + voice.
+// Must NOT restructure sentences — rhythm is already set by Pass 1.
 export function getSemanticPrompt(
   text: string,
   mode: HumanizeMode,
   chunkIndex?: number
 ): string {
   const depthMap: Record<HumanizeMode, string> = {
-    light: "",
-    medium: `- Replace AI filler phrases with natural transitions (list below).
-- Use contractions occasionally where they fit naturally.
-- One or two phrases that a real writer would reach for — not a machine.
-- Keep the register professional. Don't over-informalize.`,
-    aggressive: `- Replace every AI filler phrase in the list below.
+    light: `- Replace any obvious AI filler phrases from the list below with plain natural alternatives.
+- Make one or two word-choice improvements that sound more like a person wrote them.
+- Keep the professional tone intact.`,
+
+    medium: `- Replace all AI filler phrases from the list below.
+- Use contractions occasionally where they sound natural (it's, that's, don't, they're).
+- Replace abstract or vague phrases with concrete, specific language.
+- Add one or two connective phrases a real writer would reach for — not a machine.
+- Allow mild imperfection: a slightly informal turn of phrase is better than a perfectly smooth one that reads like it was generated.
+- Keep the register professional overall. Do not over-informalize.`,
+
+    aggressive: `- Replace every AI filler phrase and formal connector from the list below.
 - Use contractions freely where natural.
-- Add specific, concrete language where the text is vague or abstract.
-- Introduce subtle human texture: a direct aside, an understated observation, an imperfect turn of phrase.
-- The writing should feel slightly uneven in the best way — not optimized, not neutral.`,
+- Replace vague generalities with direct, specific, grounded language.
+- Introduce natural imperfection: an occasional slight awkwardness, a compressed aside, a thought that ends a touch abruptly. Real writers do this. Machines don't.
+- Where a sentence is over-polished or sounds editorial/academic, roughen it slightly.
+- The writing should feel like someone who knows their subject sat down and wrote — not optimized, not neutral, not symmetric.
+- Occasional abruptness is fine. A short blunt sentence after a long one is human.`,
   };
-  const depth = depthMap[mode];
+
   const hint =
     chunkIndex !== undefined
-      ? `\nSECTION NOTE: ${SEMANTIC_HINTS[chunkIndex % SEMANTIC_HINTS.length]}`
+      ? `\nSECTION FOCUS: ${SEMANTIC_HINTS[chunkIndex % SEMANTIC_HINTS.length]}`
       : "";
 
-  return `You are a human editor working on voice and naturalness. Sentence structure has already been set by a previous editor — do not restructure sentences or change sentence boundaries.
+  return `You are a human editor focused on voice and word choice. Sentence structure has been set by a previous editor — do not change sentence boundaries or restructure syntax.
 
-TASK: Make the text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
+TASK: Make this text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
 
 WHAT TO DO:
-${depth}
+${depthMap[mode]}
 
-AI PHRASES TO REPLACE (remove or rewrite all that appear):
-"it is important to note" / "it is worth noting" / "it is worth mentioning"
-"furthermore" / "moreover" / "additionally" / "consequently"
-"in conclusion" / "in summary" / "to summarize"
-"it is crucial" / "it is essential" / "it is imperative"
-"it should be noted" / "needless to say" / "it goes without saying"
-"delve into" / "in today's world" / "in this day and age"
-"plays a crucial role" / "plays a vital role"
-"in the realm of" / "in the field of"
-"as previously mentioned" / "as mentioned above"
-"it can be argued" / "it is undeniable" / "it is clear that" / "it is evident that"
-"in light of" / "taking into account" / "with regards to" / "in order to"
+BANNED PHRASES — remove or rewrite every instance that appears:
+"it is important to note" | "it is worth noting" | "it is worth mentioning"
+"it is crucial" | "it is essential" | "it is imperative" | "it should be noted"
+"in conclusion" | "in summary" | "to summarize" | "this essay will"
+"delve into" | "in today's world" | "in this day and age"
+"plays a crucial role" | "plays a vital role"
+"in the realm of" | "in the field of"
+"as previously mentioned" | "as mentioned above"
+"it can be argued" | "it is undeniable" | "it is clear that" | "it is evident that"
+"needless to say" | "it goes without saying"
+"in light of" | "taking into account" | "with regards to"
+
+HARD LIMITS ON CONNECTOR WORDS (overuse is a primary AI detector signal):
+- "however": use at most once in the entire section. Zero is fine.
+- "therefore": use at most once. Prefer "so" or restructure the sentence.
+- "moreover": use zero times. Find a concrete alternative.
+- "furthermore": use zero times. Find a concrete alternative.
+- "additionally": use zero times. Find a concrete alternative.
+- "consequently": use zero times. Find a concrete alternative.
+- "in conclusion": banned entirely.
+
+FORBIDDEN PATTERNS — these are AI tells, do not produce them:
+- Over-clean paragraph transitions that editorially summarize the previous point ("Having established X, we can now turn to Y...").
+- Back-to-back sentences that are equally smooth and balanced — real writing has uneven texture.
+- Pairs of sentences where the second perfectly mirrors the first in structure.
+- Ending a section with a tidy wrap-up sentence that restates the main point.
 
 WHAT NOT TO DO:
-- Do not restructure sentences or change sentence-level syntax.
-- Do not change the order of arguments or ideas.
-- Do not add new ideas or remove existing ones.
-- Do not make it overly casual if the subject is professional or technical.
+- Do not restructure sentences, split them, or merge them.
+- Do not change argument order or paragraph structure.
+- Do not add ideas or remove ideas.
+- Do not make technical or professional content overly casual.
 - Do not over-rewrite — this is refinement, not replacement.
 
 OUTPUT:
 - Output only the rewritten text. No preamble, no labels, no explanation.
 - Match word count within ±10%.
-- Preserve all paragraph breaks.
+- Preserve all paragraph breaks exactly.
 
 TEXT:
 ${text}`;
 }
 
-// ─── Pass 3: Selective Mutation ────────────────────────────────────────────
-// Only fires when the text still reads statistically synthetic after passes 1+2.
-// Surgical — only touch what is still detectably AI-generated.
+// ─── Pass 3: Selective Mutation ──────────────────────────────────────────────
+// Only fires when the internal detector still scores the text as synthetic
+// after Passes 1 and 2. Surgical — targets specific statistical patterns.
 export function getMutationPrompt(text: string): string {
-  return `You are doing a final targeted pass on text that has already been through two rounds of editing. Most of it is fine. Your job is to find and fix only what is still statistically AI-patterned.
+  return `You are doing a final surgical pass on text that has already been edited twice. Most of it is now fine. Your job is narrow: identify and fix only the specific patterns that AI detectors flag.
 
-TASK: Identify and surgically rewrite the specific spots that still read as machine-generated. Do not touch anything that already reads naturally.
+TASK: Find and fix only the spots listed below. Do not touch anything that already reads naturally.
 
-WHAT TO LOOK FOR AND FIX:
-- Sentences that still have the same rhythmic shape as their neighbors (all similar word counts, all similar structure).
-- Any remaining formal connector overload: "however", "therefore", "moreover" used more than once or twice.
-- Two or more consecutive sentences starting the same way.
-- Transitions between paragraphs that feel too smooth or editorial — like a bot stitching sections together.
-- Any remaining passive constructions that can be made active without sounding forced.
-- Parallel list-like sentence groupings that feel automated.
+WHAT AI DETECTORS MEASURE — fix any of these that remain:
 
-WHAT NOT TO TOUCH:
-- Anything that already reads naturally — leave it completely alone.
-- All meaning, facts, and arguments.
-- The overall voice and register already established.
+1. SENTENCE LENGTH UNIFORMITY
+   All sentences in a paragraph are similar lengths (e.g. 18, 20, 22, 19 words).
+   Fix: Break one or two sentences dramatically shorter or longer to widen the variance.
+
+2. CONNECTOR OVERUSE
+   "however", "therefore", "moreover", "furthermore", "additionally", "consequently"
+   appearing more than once total across the section.
+   Fix: Remove the excess ones or restructure the sentences so they're not needed.
+
+3. CONSECUTIVE SAME OPENERS
+   Two or more sentences in a row starting with the same word.
+   Fix: Reopen one of them differently.
+
+4. OVER-SMOOTH PARAGRAPH STITCHING
+   A transition sentence between paragraphs that feels editorial — like a narrator
+   stitching sections together rather than a writer continuing a thought.
+   Fix: Remove or rough it up. An abrupt paragraph start is more human.
+
+5. CLAUSE LENGTH UNIFORMITY
+   Comma-separated clauses that are all similar lengths inside sentences.
+   Fix: Break the symmetry — make one clause very short, another very long.
+
+6. PARALLEL SENTENCE GROUPS
+   Two or three consecutive sentences that follow the exact same grammatical structure.
+   Fix: Restructure one of them so it breaks the pattern.
+
+HARD RULE:
+If a sentence already reads naturally, do not touch it. The goal is to fix statistical
+outliers, not to rewrite clean text. Leave good writing alone.
 
 OUTPUT:
 - Output only the final text. No preamble, no commentary, no labels.
 - Match word count within ±10%.
-- Preserve all paragraph breaks.
+- Preserve all paragraph breaks exactly.
 
 TEXT:
 ${text}`;
