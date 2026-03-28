@@ -1,9 +1,35 @@
 export type HumanizeMode = "light" | "medium" | "aggressive";
 
+// Subtle per-chunk rhythm hints — applied to structural pass.
+// Vary by index so adjacent chunks get different micro-instructions,
+// producing natural local inconsistency across the document.
+const STRUCTURAL_HINTS = [
+  "Open this section with a short, direct sentence.",
+  "Let this section have at least one long, detailed sentence.",
+  "Keep this section punchy — shorter sentences work well here.",
+  "This section can flow more freely — longer sentences are fine.",
+  "Vary the rhythm here more than usual.",
+  "Make the first sentence of this section rhythmically distinct from the last.",
+];
+
+// Subtle per-chunk voice hints — applied to semantic pass.
+const SEMANTIC_HINTS = [
+  "The opening here can be a touch more direct.",
+  "Slightly more concrete language than usual fits this section.",
+  "A relaxed, conversational turn of phrase works here.",
+  "Keep this section crisp — no hedging.",
+  "Let this section breathe slightly — a shade more reflective.",
+  "Make the language here feel natural and unpolished.",
+];
+
 // ─── Pass 1: Structural Rewrite ────────────────────────────────────────────
 // Focuses purely on sentence rhythm and syntax — not word choices or meaning.
 // Goal: break the uniform length + parallel structure AI produces by default.
-export function getStructuralPrompt(text: string, mode: HumanizeMode): string {
+export function getStructuralPrompt(
+  text: string,
+  mode: HumanizeMode,
+  chunkIndex?: number
+): string {
   const scope = {
     light:
       "Light touch only — fix 2-3 sentences that are rhythmically identical to their neighbors. Everything else stays.",
@@ -13,11 +39,16 @@ export function getStructuralPrompt(text: string, mode: HumanizeMode): string {
       "Full structural disruption — the text must not have two consecutive sentences with the same rhythmic shape. Vary aggressively.",
   }[mode];
 
+  const hint =
+    chunkIndex !== undefined
+      ? `\nSECTION NOTE: ${STRUCTURAL_HINTS[chunkIndex % STRUCTURAL_HINTS.length]}`
+      : "";
+
   return `You are a structural copy editor. Your only job right now is sentence rhythm and structure — not word choices, not meaning, not style.
 
 TASK: Rewrite the text below to break its structural uniformity.
 
-SCOPE: ${scope}
+SCOPE: ${scope}${hint}
 
 WHAT TO DO:
 - Vary sentence lengths. AI writes uniformly (all medium). Mix short punchy sentences with long flowing ones.
@@ -45,7 +76,11 @@ ${text}`;
 // ─── Pass 2: Semantic Naturalness ──────────────────────────────────────────
 // Runs after structure is fixed. Focuses on voice, word choices, transitions.
 // Goal: replace AI-phrasing without restructuring what pass 1 already shaped.
-export function getSemanticPrompt(text: string, mode: HumanizeMode): string {
+export function getSemanticPrompt(
+  text: string,
+  mode: HumanizeMode,
+  chunkIndex?: number
+): string {
   const depthMap: Record<HumanizeMode, string> = {
     light: "",
     medium: `- Replace AI filler phrases with natural transitions (list below).
@@ -59,10 +94,14 @@ export function getSemanticPrompt(text: string, mode: HumanizeMode): string {
 - The writing should feel slightly uneven in the best way — not optimized, not neutral.`,
   };
   const depth = depthMap[mode];
+  const hint =
+    chunkIndex !== undefined
+      ? `\nSECTION NOTE: ${SEMANTIC_HINTS[chunkIndex % SEMANTIC_HINTS.length]}`
+      : "";
 
   return `You are a human editor working on voice and naturalness. Sentence structure has already been set by a previous editor — do not restructure sentences or change sentence boundaries.
 
-TASK: Make the text read like a real person wrote it. Focus only on word choices, transitions, and voice.
+TASK: Make the text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
 
 WHAT TO DO:
 ${depth}

@@ -17,15 +17,74 @@ function truncateToWordLimit(text: string, wordLimit: number): string {
   return words.slice(0, wordLimit).join(" ");
 }
 
-// Split on paragraph boundaries — used by Phase 2 chunk pipeline.
-// In Phase 1 we run passes on the full text; this function is wired up but
-// the output is merged back before processing.
-export function splitIntoChunks(text: string): string[] {
+// Split a paragraph into its individual sentences.
+function getSentences(para: string): string[] {
+  return para
+    .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+// Variable-size chunker.
+//
+// Strategy:
+//   1. Split on paragraph boundaries first.
+//   2. Short paragraphs (≤3 sentences) → kept as a single chunk.
+//   3. Longer paragraphs → split into variable-size sentence groups (2 or 3
+//      sentences each) so adjacent chunks have different rhythmic weights.
+//   4. Tiny chunks (< 15 words) are merged into the previous chunk.
+//   5. Total chunk count capped at 8 to keep API calls bounded.
+//
+// Goal: introduce natural local inconsistency — humans write paragraph-by-
+// paragraph with uneven focus, not with global uniformity.
+export function splitIntoVariableChunks(text: string): string[] {
   const paragraphs = text
     .split(/\n\s*\n/)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
-  return paragraphs.length > 0 ? paragraphs : [text.trim()];
+
+  const raw: string[] = [];
+
+  for (const para of paragraphs) {
+    const sentences = getSentences(para);
+
+    if (sentences.length <= 3) {
+      // Short paragraph — keep whole
+      raw.push(para);
+      continue;
+    }
+
+    // Longer paragraph — split into variable sentence groups
+    let i = 0;
+    while (i < sentences.length) {
+      const wordCount = sentences[i].split(/\s+/).length;
+      // Long sentence → group of 2; short sentence → alternate 2/3
+      const groupSize =
+        wordCount > 22 ? 2 : i % 2 === 0 ? 3 : 2;
+      const end = Math.min(i + groupSize, sentences.length);
+      raw.push(sentences.slice(i, end).join(" "));
+      i = end;
+    }
+  }
+
+  // Merge chunks that are too short (< 15 words) into predecessor
+  const chunks: string[] = [];
+  for (const chunk of raw) {
+    if (chunks.length > 0 && chunk.split(/\s+/).length < 15) {
+      chunks[chunks.length - 1] += " " + chunk;
+    } else {
+      chunks.push(chunk);
+    }
+  }
+
+  // Cap at 8 chunks — merge tail overflow into last chunk
+  if (chunks.length > 8) {
+    const head = chunks.slice(0, 7);
+    const tail = chunks.slice(7).join(" ");
+    return [...head, tail];
+  }
+
+  return chunks.length > 0 ? chunks : [text.trim()];
 }
 
 // ─── Model Wrappers ─────────────────────────────────────────────────────────
@@ -105,40 +164,53 @@ async function callModel(
 
 // ─── Pipeline Passes ────────────────────────────────────────────────────────
 
-// Pass 1 — Structural rewrite.
-// Higher temperature to introduce rhythm variation. Focus: sentence structure only.
-// Runs for all modes.
+// Pass 1 — Structural rewrite per chunk.
+// Parallel across chunks. Each chunk gets a variation hint via chunkIndex.
+// Higher temperature to introduce rhythm variation.
 async function structuralPass(
-  text: string,
+  chunks: string[],
   mode: HumanizeMode
-): Promise<string> {
+): Promise<string[]> {
   const temps: Record<HumanizeMode, number> = {
     light: 0.70,
     medium: 0.85,
     aggressive: 0.95,
   };
-  return callModel(getStructuralPrompt(text, mode), temps[mode], 0.95);
+  const temp = temps[mode];
+
+  return Promise.all(
+    chunks.map((chunk, i) =>
+      callModel(getStructuralPrompt(chunk, mode, i), temp, 0.95)
+    )
+  );
 }
 
-// Pass 2 — Semantic naturalness.
-// Lower temperature to preserve meaning while improving voice.
-// Skipped for light mode — light rewrite doesn't need voice rework.
+// Pass 2 — Semantic naturalness per chunk.
+// Parallel across chunks. Lower temperature to preserve meaning.
+// Skipped entirely for light mode.
 async function semanticPass(
-  text: string,
+  chunks: string[],
   mode: HumanizeMode
-): Promise<string> {
-  if (mode === "light") return text;
+): Promise<string[]> {
+  if (mode === "light") return chunks;
+
   const temps: Record<HumanizeMode, number> = {
     light: 0.70,
     medium: 0.75,
     aggressive: 0.82,
   };
-  return callModel(getSemanticPrompt(text, mode), temps[mode], 0.90);
+  const temp = temps[mode];
+
+  return Promise.all(
+    chunks.map((chunk, i) =>
+      callModel(getSemanticPrompt(chunk, mode, i), temp, 0.90)
+    )
+  );
 }
 
-// Pass 3 — Selective mutation.
-// Only fires when the text still scores above the synthetic threshold.
-// Skipped for light mode. Threshold is lower for aggressive (stricter).
+// Pass 3 — Selective mutation on the full merged text.
+// Runs once on the assembled output, not per chunk — short chunks give
+// noisy detector readings. Gated by score threshold; skipped if already good.
 async function mutationPass(
   text: string,
   mode: HumanizeMode
@@ -148,7 +220,7 @@ async function mutationPass(
   const threshold = mode === "aggressive" ? 42 : 52;
   const { score } = detectAI(text);
 
-  if (score <= threshold) return text; // already good enough — skip
+  if (score <= threshold) return text; // already good — skip
 
   return callModel(getMutationPrompt(text), 0.90, 0.95);
 }
@@ -162,14 +234,18 @@ export async function humanize(
 ): Promise<string> {
   const truncated = truncateToWordLimit(inputText, wordLimit);
 
-  // Pass 1: Fix structural patterns and sentence rhythm
-  let result = await structuralPass(truncated, mode);
+  // Split into variable-size chunks for natural local inconsistency
+  const chunks = splitIntoVariableChunks(truncated);
 
-  // Pass 2: Improve naturalness and voice (medium + aggressive only)
-  result = await semanticPass(result, mode);
+  // Pass 1: Structural rewrite — parallel per chunk
+  const structural = await structuralPass(chunks, mode);
 
-  // Pass 3: Targeted mutation of remaining synthetic patterns (gated by score)
-  result = await mutationPass(result, mode);
+  // Pass 2: Semantic naturalness — parallel per chunk (skipped for light)
+  const semantic = await semanticPass(structural, mode);
 
-  return result;
+  // Merge chunks back into full text
+  const merged = semantic.join("\n\n");
+
+  // Pass 3: Targeted mutation on full merged text (gated by score)
+  return mutationPass(merged, mode);
 }
