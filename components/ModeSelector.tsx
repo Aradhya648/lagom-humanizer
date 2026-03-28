@@ -11,17 +11,17 @@ const modes: { id: Mode; label: string; tooltip: string }[] = [
   {
     id: "light",
     label: "Light",
-    tooltip: "Minor tweaks — vary sentence openings, replace stiff phrases. Keeps academic tone intact.",
+    tooltip: "Gentle edits — smooths out stiff phrasing while keeping your original structure and tone.",
   },
   {
     id: "medium",
     label: "Medium",
-    tooltip: "Natural rewrite — adds connective phrases, varies vocabulary, introduces subtle human imperfections.",
+    tooltip: "A real rewrite — different rhythm, fresher word choices, still your argument.",
   },
   {
     id: "aggressive",
     label: "Aggressive",
-    tooltip: "Full voice rewrite — contractions, rhythm variation, rhetorical questions. Zero AI fingerprints.",
+    tooltip: "Full voice overhaul. It'll read like you actually sat down and wrote the thing.",
   },
 ];
 

@@ -107,7 +107,7 @@ export async function humanize(
   } catch (hfError) {
     console.error("HuggingFace fallback also failed:", hfError);
     throw new Error(
-      "Both Gemini and HuggingFace APIs failed. Please check your API keys and try again."
+      "The rewriting service is unavailable right now. Please try again in a moment."
     );
   }
 }

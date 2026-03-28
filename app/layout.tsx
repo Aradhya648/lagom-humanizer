@@ -4,11 +4,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "lagom — just the right amount of human",
   description:
-    "Transform AI-generated text into natural, human-sounding writing. Academic and general writing modes.",
-  keywords: ["AI humanizer", "text humanizer", "academic writing", "AI detection", "humanize AI text"],
+    "Polish your writing so it sounds exactly like you. Three editing modes for academic and general use.",
+  keywords: ["writing tool", "text editor", "academic writing", "writing assistant", "prose editor"],
   openGraph: {
     title: "lagom — just the right amount of human",
-    description: "Transform AI-generated text into natural, human-sounding writing.",
+    description: "Polish your writing so it sounds exactly like you.",
     type: "website",
   },
 };

@@ -106,7 +106,7 @@ export default function Home() {
             </span>
           </div>
           <div className="flex items-center gap-4 text-xs text-muted">
-            <span className="hidden sm:inline">Gemini 2.5 Flash · Free tier</span>
+            <span className="hidden sm:inline">Free · No sign-up</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Live
@@ -181,7 +181,7 @@ export default function Home() {
               <textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Paste your AI-generated text here..."
+                placeholder="Paste your text here..."
                 className="w-full h-80 lg:h-[460px] resize-none bg-surface border border-border rounded-2xl px-4 py-4 text-sm text-text placeholder:text-muted/50 leading-relaxed transition-all duration-200 focus:border-accent/40"
                 spellCheck={false}
               />
@@ -253,7 +253,7 @@ export default function Home() {
               {!loading && !outputText && (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <span className="text-sm text-muted/40 text-center px-8">
-                    Your humanized text will appear here
+                    Rewritten text will show up here
                   </span>
                 </div>
               )}
@@ -291,7 +291,7 @@ export default function Home() {
             {" · "}Built for writers, not robots
           </span>
           <span className="text-xs text-muted/40">
-            Powered by Gemini 2.5 Flash
+            Free to use · No account needed
           </span>
         </div>
       </footer>
