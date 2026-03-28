@@ -206,9 +206,17 @@ async function callModel(prompt: string, settings: GenSettings): Promise<string>
 
 // ─── Pipeline Passes ────────────────────────────────────────────────────────
 
+// Validate a model output for a chunk: must be non-empty.
+// If the model returns empty, fall back to the original input for that chunk.
+function validateChunkOutput(output: string, fallback: string): string {
+  return output.trim().length > 0 ? output.trim() : fallback;
+}
+
 // Pass 1 — Structural rewrite per chunk.
 // Parallel across chunks. Each chunk gets a variation hint via chunkIndex.
 // Uses high-diversity settings: unconstrained topK, high topP, frequencyPenalty.
+// Per-chunk failures fall back to the original chunk text — a single bad API
+// call should not abort the entire request.
 async function structuralPass(
   chunks: string[],
   mode: HumanizeMode
@@ -217,6 +225,8 @@ async function structuralPass(
   return Promise.all(
     chunks.map((chunk, i) =>
       callModel(getStructuralPrompt(chunk, mode, i), settings)
+        .then((out) => validateChunkOutput(out, chunk))
+        .catch(() => chunk) // fall back to original on any failure
     )
   );
 }
@@ -234,6 +244,8 @@ async function semanticPass(
   return Promise.all(
     chunks.map((chunk, i) =>
       callModel(getSemanticPrompt(chunk, mode, i), settings)
+        .then((out) => validateChunkOutput(out, chunk))
+        .catch(() => chunk) // fall back to structural output on any failure
     )
   );
 }

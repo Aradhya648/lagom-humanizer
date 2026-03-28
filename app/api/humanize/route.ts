@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { humanize, HumanizeMode } from "@/lib/humanizer";
 import { detectAI } from "@/lib/detector";
 
+// Increase serverless function timeout for multi-pass aggressive mode.
+// Vercel Pro/Enterprise honours this; Hobby plan caps at 10s regardless.
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
