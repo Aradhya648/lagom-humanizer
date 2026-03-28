@@ -87,20 +87,64 @@ export function splitIntoVariableChunks(text: string): string[] {
   return chunks.length > 0 ? chunks : [text.trim()];
 }
 
+// ─── Generation Settings ─────────────────────────────────────────────────────
+// Each pass uses a distinct sampling regime so pass 2 cannot statistically
+// mirror pass 1's output distribution.
+
+interface GenSettings {
+  temperature: number;
+  topP: number;
+  topK?: number;           // undefined = unconstrained (max variety)
+  frequencyPenalty?: number; // 0–1: penalises repeating tokens seen so far
+  presencePenalty?: number;  // 0–1: penalises tokens already present at all
+}
+
+// Structural pass: maximum syntactic diversity.
+// High topP + no topK + frequencyPenalty → broad sampling, discourages
+// repeating the same sentence patterns within a chunk.
+const STRUCTURAL_SETTINGS: Record<HumanizeMode, GenSettings> = {
+  light:      { temperature: 0.72, topP: 0.95, frequencyPenalty: 0.15 },
+  medium:     { temperature: 0.88, topP: 0.97, frequencyPenalty: 0.25 },
+  aggressive: { temperature: 0.97, topP: 0.97, frequencyPenalty: 0.30, presencePenalty: 0.10 },
+};
+
+// Semantic pass: focused natural vocabulary.
+// topK=40 constrains word-choice to common/natural tokens, preventing the
+// model from drifting back into unusual AI-typical phrasings.
+// Lower topP + light penalty → stable, grounded language.
+const SEMANTIC_SETTINGS: Record<HumanizeMode, GenSettings> = {
+  light:      { temperature: 0.70, topP: 0.88, topK: 40 },
+  medium:     { temperature: 0.73, topP: 0.88, topK: 40, frequencyPenalty: 0.10 },
+  aggressive: { temperature: 0.80, topP: 0.90, topK: 40, frequencyPenalty: 0.12 },
+};
+
+// Mutation pass: targeted and precise.
+// Medium temperature + topK=35 → focused changes without random drift.
+const MUTATION_SETTINGS: GenSettings = {
+  temperature: 0.88,
+  topP: 0.92,
+  topK: 35,
+  frequencyPenalty: 0.20,
+  presencePenalty: 0.08,
+};
+
 // ─── Model Wrappers ─────────────────────────────────────────────────────────
 
-async function callGemini(
-  prompt: string,
-  temperature: number,
-  topP: number
-): Promise<string> {
+async function callGemini(prompt: string, settings: GenSettings): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
-    generationConfig: { temperature, topP, maxOutputTokens: 4096 },
+    generationConfig: {
+      temperature: settings.temperature,
+      topP: settings.topP,
+      topK: settings.topK,
+      frequencyPenalty: settings.frequencyPenalty,
+      presencePenalty: settings.presencePenalty,
+      maxOutputTokens: 4096,
+    },
   });
 
   const result = await model.generateContent(prompt);
@@ -111,6 +155,8 @@ async function callGemini(
   return text.trim();
 }
 
+// Emergency fallback — only used when Gemini fails entirely.
+// Not used for per-chunk retries; that would obscure the root cause.
 async function callHuggingFace(prompt: string): Promise<string> {
   const apiKey = process.env.HUGGINGFACE_API_KEY;
   const HF_API_URL =
@@ -148,14 +194,10 @@ async function callHuggingFace(prompt: string): Promise<string> {
   throw new Error("Unexpected HuggingFace response format");
 }
 
-// Primary: Gemini. Fallback: HuggingFace.
-async function callModel(
-  prompt: string,
-  temperature: number,
-  topP: number
-): Promise<string> {
+// Primary: Gemini with pass-specific settings. Fallback: HuggingFace (Gemini failure only).
+async function callModel(prompt: string, settings: GenSettings): Promise<string> {
   try {
-    return await callGemini(prompt, temperature, topP);
+    return await callGemini(prompt, settings);
   } catch (geminiError) {
     console.warn("Gemini failed, falling back to HuggingFace:", geminiError);
     return await callHuggingFace(prompt);
@@ -166,44 +208,32 @@ async function callModel(
 
 // Pass 1 — Structural rewrite per chunk.
 // Parallel across chunks. Each chunk gets a variation hint via chunkIndex.
-// Higher temperature to introduce rhythm variation.
+// Uses high-diversity settings: unconstrained topK, high topP, frequencyPenalty.
 async function structuralPass(
   chunks: string[],
   mode: HumanizeMode
 ): Promise<string[]> {
-  const temps: Record<HumanizeMode, number> = {
-    light: 0.70,
-    medium: 0.85,
-    aggressive: 0.95,
-  };
-  const temp = temps[mode];
-
+  const settings = STRUCTURAL_SETTINGS[mode];
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getStructuralPrompt(chunk, mode, i), temp, 0.95)
+      callModel(getStructuralPrompt(chunk, mode, i), settings)
     )
   );
 }
 
 // Pass 2 — Semantic naturalness per chunk.
-// Parallel across chunks. Lower temperature to preserve meaning.
+// Parallel across chunks. Uses topK=40 to constrain word-choice to natural
+// human vocabulary — statistically distinct from the structural pass regime.
 // Skipped entirely for light mode.
 async function semanticPass(
   chunks: string[],
   mode: HumanizeMode
 ): Promise<string[]> {
   if (mode === "light") return chunks;
-
-  const temps: Record<HumanizeMode, number> = {
-    light: 0.70,
-    medium: 0.75,
-    aggressive: 0.82,
-  };
-  const temp = temps[mode];
-
+  const settings = SEMANTIC_SETTINGS[mode];
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getSemanticPrompt(chunk, mode, i), temp, 0.90)
+      callModel(getSemanticPrompt(chunk, mode, i), settings)
     )
   );
 }
@@ -222,7 +252,7 @@ async function mutationPass(
 
   if (score <= threshold) return text; // already good — skip
 
-  return callModel(getMutationPrompt(text), 0.90, 0.95);
+  return callModel(getMutationPrompt(text), MUTATION_SETTINGS);
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
