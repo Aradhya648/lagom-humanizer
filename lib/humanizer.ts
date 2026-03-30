@@ -1364,6 +1364,255 @@ function enforceLengthDiscipline(
   return kept.join(" ");
 }
 
+// ─── Stylometric Correction Layer ────────────────────────────────────────────
+// Phase 20: Hybrid post-processing that analyzes final output sentence-by-
+// sentence and applies selective deterministic corrections ONLY where local
+// polish score indicates excessive smoothness. This creates a text that is
+// partly model-generated and partly rule-shaped — breaking model-family
+// signatures that survive all earlier passes.
+//
+// Five correction types, each gated by a per-sentence or per-paragraph
+// polish score so they never fire everywhere at once.
+
+// Per-sentence polish score (0-100). Higher = more polished/AI-like.
+function sentencePolishScore(sentence: string): number {
+  let score = 0;
+  const words = sentence.split(/\s+/);
+  const wordCount = words.length;
+
+  // Length in the AI sweet spot (18-28 words) → polished
+  if (wordCount >= 18 && wordCount <= 28) score += 25;
+  else if (wordCount >= 14 && wordCount <= 32) score += 10;
+
+  // Contains flourish/upgrade words
+  if (FLOURISH_MARKERS.test(sentence)) score += 20;
+
+  // Contains formal connectors
+  if (/\b(however|therefore|moreover|furthermore|additionally|consequently|nevertheless)\b/i.test(sentence)) score += 20;
+
+  // Balanced comma structure (2+ commas, roughly evenly spaced)
+  const commas = (sentence.match(/,/g) || []).length;
+  if (commas >= 2) {
+    const parts = sentence.split(",").map(p => p.trim().split(/\s+/).length);
+    const avg = parts.reduce((a, b) => a + b, 0) / parts.length;
+    const allSimilar = parts.every(p => p >= avg * 0.6 && p <= avg * 1.4);
+    if (allSimilar) score += 15;
+  }
+
+  // Starts with a common AI opener pattern
+  if (/^(This|These|The|It|They|While|Although|Given)\b/.test(sentence)) score += 10;
+
+  // Ends with a tidy conclusion phrase
+  if (/\b(as a whole|in general|overall|at its core|in the end|when combined|taken together)\.?$/i.test(sentence)) score += 15;
+
+  return Math.min(100, score);
+}
+
+// Correction 1: Sentence flattening — reduce one flourish in over-polished sentences.
+const STYLO_FLOURISH_FLATTEN: [RegExp, string][] = [
+  [/\btruly\s+/gi, ""],
+  [/\bdeeply\s+/gi, ""],
+  [/\bhighly\s+/gi, ""],
+  [/\bquite\s+/gi, ""],
+  [/\brather\s+/gi, ""],
+  [/\bparticularly\s+/gi, ""],
+  [/\bespecially\s+/gi, ""],
+  [/\bfundamentally\s+/gi, ""],
+  [/\bsignificantly\s+/gi, ""],
+  [/\bremarkably\s+/gi, ""],
+];
+
+function styloFlattenSentence(sentence: string): string {
+  // Apply only ONE flourish removal per sentence
+  for (const [pattern, replacement] of STYLO_FLOURISH_FLATTEN) {
+    if (pattern.test(sentence)) {
+      const result = sentence.replace(pattern, replacement);
+      // Fix double spaces and re-capitalize if needed
+      const cleaned = result.replace(/\s{2,}/g, " ").trim();
+      if (cleaned.length > 10) return cleaned;
+    }
+  }
+  return sentence;
+}
+
+// Correction 2: Lexical simplification — replace one upgraded word.
+const STYLO_SIMPLIFY: [RegExp, string][] = [
+  [/\bdemonstrates?\b/gi, "shows"],
+  [/\butiliz(e[sd]?|ing)\b/gi, "us$1"],
+  [/\bfacilitat(e[sd]?|ing)\b/gi, "help$1"],
+  [/\bimplement(ed|ing|s)?\b/gi, "set up"],
+  [/\boptimiz(e[sd]?|ing)\b/gi, "improv$1"],
+  [/\benhance[sd]?\b/gi, "improved"],
+  [/\bexhibits?\b/gi, "shows"],
+  [/\bpossess(es)?\b/gi, "has"],
+  [/\bacquir(e[sd]?|ing)\b/gi, "get"],
+  [/\bcommenc(e[sd]?|ing)\b/gi, "start"],
+  [/\bconclude[sd]?\b/gi, "ended"],
+  [/\bnumerous\b/gi, "many"],
+  [/\bsubsequently\b/gi, "then"],
+  [/\bprior to\b/gi, "before"],
+  [/\bin the event that\b/gi, "if"],
+];
+
+function styloSimplify(sentence: string): string {
+  for (const [pattern, replacement] of STYLO_SIMPLIFY) {
+    if (pattern.test(sentence)) {
+      return sentence.replace(pattern, replacement);
+    }
+  }
+  return sentence;
+}
+
+// Correction 3: Punctuation disturbance — simplify balanced punctuation.
+function styloPunctuationDisturb(sentence: string): string {
+  // If sentence has a semicolon with balanced halves, replace with period + new sentence start
+  const semiPos = sentence.indexOf(";");
+  if (semiPos > 0) {
+    const before = sentence.slice(0, semiPos).trim();
+    const after = sentence.slice(semiPos + 1).trim();
+    const beforeWords = before.split(/\s+/).length;
+    const afterWords = after.split(/\s+/).length;
+    // Balanced halves (within 40% of each other)
+    const ratio = Math.min(beforeWords, afterWords) / Math.max(beforeWords, afterWords);
+    if (ratio > 0.6 && afterWords > 3) {
+      return before + ". " + after.charAt(0).toUpperCase() + after.slice(1);
+    }
+  }
+
+  // If sentence has an em-dash pair creating a balanced aside, simplify to commas
+  const emDashCount = (sentence.match(/—/g) || []).length;
+  if (emDashCount === 2) {
+    return sentence.replace(/—/g, ",");
+  }
+
+  return sentence;
+}
+
+// Correction 4: Cadence interruption — shorten one sentence if paragraph rhythm is too smooth.
+function styloCadenceInterrupt(paragraph: string): string {
+  const sentences = getSentences(paragraph);
+  if (sentences.length < 4) return paragraph;
+
+  const lengths = sentences.map(s => s.split(/\s+/).length);
+  const avg = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+  const variance = lengths.reduce((sum, l) => sum + Math.pow(l - avg, 2), 0) / lengths.length;
+  const stdDev = Math.sqrt(variance);
+
+  // Only interrupt if cadence is too smooth (low variance relative to avg)
+  if (stdDev > avg * 0.35) return paragraph; // already varied enough
+
+  // Find the longest mid-paragraph sentence and truncate it
+  let maxLen = 0;
+  let maxIdx = -1;
+  for (let i = 1; i < sentences.length - 1; i++) {
+    if (lengths[i] > maxLen) {
+      maxLen = lengths[i];
+      maxIdx = i;
+    }
+  }
+
+  if (maxIdx < 0 || maxLen < 16) return paragraph;
+
+  const sentence = sentences[maxIdx];
+  // Truncate at first comma/semicolon after word 8
+  const cutPoints = [...sentence.matchAll(/[,;]/g)];
+  for (const cut of cutPoints) {
+    if (cut.index && cut.index > 20 && cut.index < sentence.length - 15) {
+      sentences[maxIdx] = sentence.slice(0, cut.index).trimEnd() + ".";
+      return sentences.join(" ");
+    }
+  }
+
+  return paragraph;
+}
+
+// Correction 5: Rhetorical bridge removal — if two rhetorical bridges appear within 3 sentences.
+const RHETORICAL_BRIDGES = /\b(What this means|What stands out|The key takeaway|The bottom line|The point here|Put simply|Simply put|In short|In essence|At its core|The upshot)\b/i;
+
+function styloRemoveExcessBridges(paragraph: string): string {
+  const sentences = getSentences(paragraph);
+  if (sentences.length < 3) return paragraph;
+
+  let lastBridgeIdx = -10;
+  for (let i = 0; i < sentences.length; i++) {
+    if (RHETORICAL_BRIDGES.test(sentences[i])) {
+      if (i - lastBridgeIdx <= 3) {
+        // Two bridges within 3 sentences — strip the second one
+        sentences[i] = sentences[i].replace(RHETORICAL_BRIDGES, "").trim();
+        if (sentences[i].length > 5) {
+          sentences[i] = sentences[i].charAt(0).toUpperCase() + sentences[i].slice(1);
+          // Clean up leading punctuation artifacts
+          sentences[i] = sentences[i].replace(/^[,;:]\s*/, "");
+          if (sentences[i].length > 0) {
+            sentences[i] = sentences[i].charAt(0).toUpperCase() + sentences[i].slice(1);
+          }
+        }
+      }
+      lastBridgeIdx = i;
+    }
+  }
+
+  return sentences.join(" ");
+}
+
+// Master stylometric correction — applies corrections selectively based on polish score.
+function stylometricCorrectionLayer(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const corrected = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    // Score each sentence
+    const scores = sentences.map(s => sentencePolishScore(s));
+    const avgPolish = scores.reduce((a, b) => a + b, 0) / scores.length;
+
+    // Only apply corrections if average polish is high (>40)
+    if (avgPolish <= 40) return para;
+
+    // Apply sentence-level corrections to the most polished sentences
+    let correctionCount = 0;
+    const maxCorrections = Math.ceil(sentences.length * 0.35); // correct up to ~35%
+
+    const processed = sentences.map((sentence, i) => {
+      if (correctionCount >= maxCorrections) return sentence;
+      if (scores[i] < 45) return sentence; // this sentence is fine
+
+      let result = sentence;
+
+      // Apply corrections in priority order — only one per sentence
+      if (scores[i] >= 70) {
+        // Very polished: flatten + simplify
+        result = styloFlattenSentence(result);
+        if (result !== sentence) { correctionCount++; return result; }
+        result = styloSimplify(result);
+        if (result !== sentence) { correctionCount++; return result; }
+      } else if (scores[i] >= 55) {
+        // Moderately polished: simplify or disturb punctuation
+        result = styloSimplify(result);
+        if (result !== sentence) { correctionCount++; return result; }
+        result = styloPunctuationDisturb(result);
+        if (result !== sentence) { correctionCount++; return result; }
+      } else {
+        // Mildly polished: just punctuation disturbance
+        result = styloPunctuationDisturb(result);
+        if (result !== sentence) { correctionCount++; return result; }
+      }
+
+      return result;
+    });
+
+    // Apply paragraph-level corrections
+    let paragraphResult = processed.join(" ");
+    paragraphResult = styloCadenceInterrupt(paragraphResult);
+    paragraphResult = styloRemoveExcessBridges(paragraphResult);
+
+    return paragraphResult;
+  });
+
+  return corrected.join("\n\n");
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -1420,5 +1669,8 @@ export async function humanize(
   const islanded = lowMutationIslands(multiHardened, truncated);
 
   // Pass 10: Length discipline — enforce 90%–110% of input word count
-  return enforceLengthDiscipline(islanded, inputWordCount);
+  const lengthEnforced = enforceLengthDiscipline(islanded, inputWordCount);
+
+  // Pass 11: Stylometric correction layer (no LLM call) — selective rule-shaped surgery
+  return stylometricCorrectionLayer(lengthEnforced);
 }
