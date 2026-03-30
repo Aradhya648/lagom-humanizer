@@ -1949,6 +1949,110 @@ function microHumanNoiseEngine(text: string): string {
   return result;
 }
 
+// ─── First Paragraph Stylometric Hardening ──────────────────────────────────
+// Phase 23: Detectors (especially GPTZero and Originality.ai) assign
+// disproportionate confidence weight to the first paragraph. This pass
+// runs extra stylometric corrections on paragraph 1 only:
+// - Calmer first sentence (strip intensifiers, simplify vocabulary)
+// - Lower lexical ambition (downgrade remaining upgrade words)
+// - Reduced opener stylization (remove leading filler/connectors)
+
+function firstParagraphStylometricHardening(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length === 0) return text;
+
+  let firstPara = paragraphs[0];
+  const sentences = getSentences(firstPara);
+  if (sentences.length === 0) return text;
+
+  // A: Calm the first sentence
+  let firstSentence = sentences[0];
+
+  // Strip intensifiers from first sentence
+  firstSentence = firstSentence
+    .replace(/\b(truly|deeply|highly|remarkably|incredibly|extremely|particularly|especially|absolutely)\s+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  // Simplify vocabulary in first sentence
+  const firstSentenceSimplifications: [RegExp, string][] = [
+    [/\btransformative\b/gi, "big"],
+    [/\bsignificant\b/gi, "real"],
+    [/\bsubstantial\b/gi, "solid"],
+    [/\bcomprehensive\b/gi, "full"],
+    [/\bfundamental\b/gi, "basic"],
+    [/\bdemonstrates?\b/gi, "shows"],
+    [/\bfacilitat(e[sd]?|ing)\b/gi, "help"],
+    [/\bexhibits?\b/gi, "shows"],
+    [/\bnumerous\b/gi, "many"],
+    [/\bsophisticated\b/gi, "advanced"],
+    [/\bphenomen(on|a)\b/gi, "thing"],
+  ];
+  for (const [pattern, replacement] of firstSentenceSimplifications) {
+    firstSentence = firstSentence.replace(pattern, replacement);
+  }
+
+  // Ensure first sentence doesn't start with a stylized opener
+  firstSentence = firstSentence
+    .replace(/^(In today's world|In the modern era|Throughout history|In recent years|Across the globe|In an era of),?\s+/i, "")
+    .trim();
+
+  if (firstSentence.length > 5) {
+    firstSentence = firstSentence.charAt(0).toUpperCase() + firstSentence.slice(1);
+  }
+
+  sentences[0] = firstSentence;
+
+  // B: Lower lexical ambition across all sentences in first paragraph
+  const lowerAmbition: [RegExp, string][] = [
+    [/\bpivotal\b/gi, "key"],
+    [/\bcrucial\b/gi, "important"],
+    [/\bessential\b/gi, "needed"],
+    [/\bvital\b/gi, "important"],
+    [/\bprofound\b/gi, "real"],
+    [/\bremarkable\b/gi, "clear"],
+    [/\bextraordinary\b/gi, "unusual"],
+    [/\bunprecedented\b/gi, "new"],
+    [/\binnovative\b/gi, "new"],
+    [/\bcompelling\b/gi, "strong"],
+    [/\bnotable\b/gi, "clear"],
+  ];
+
+  for (let i = 1; i < sentences.length; i++) {
+    let s = sentences[i];
+    for (const [pattern, replacement] of lowerAmbition) {
+      s = s.replace(pattern, replacement);
+    }
+    sentences[i] = s;
+  }
+
+  // C: If first paragraph has 4+ sentences, strip connector from sentence 2
+  if (sentences.length >= 4) {
+    const connectorRe = /^(However|Moreover|Furthermore|Additionally|Nevertheless|Indeed|Notably|Importantly|Critically|Crucially|Significantly),?\s+/i;
+    if (connectorRe.test(sentences[1])) {
+      const stripped = sentences[1].replace(connectorRe, "");
+      if (stripped.length > 10) {
+        sentences[1] = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+      }
+    }
+  }
+
+  // D: If last sentence of first paragraph is a tidy summary, flatten it
+  if (sentences.length >= 3) {
+    const lastIdx = sentences.length - 1;
+    let lastSentence = sentences[lastIdx];
+    // Strip trailing wrap-up clauses
+    lastSentence = lastSentence
+      .replace(/,?\s+which (ultimately|essentially|fundamentally|clearly|broadly) .+\.$/i, ".")
+      .replace(/,?\s+making (it|this|them) .+\.$/i, ".")
+      .replace(/,?\s+and (this|that|these) (is|are|remain[s]?) .+\.$/i, ".");
+    sentences[lastIdx] = lastSentence;
+  }
+
+  paragraphs[0] = sentences.join(" ");
+  return paragraphs.join("\n\n");
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -2014,5 +2118,8 @@ export async function humanize(
   const signatureBroken = sentenceSignatureBreaker(styloCorrected);
 
   // Pass 13: Micro human noise engine (no LLM call) — controlled irregularities
-  return microHumanNoiseEngine(signatureBroken);
+  const noised = microHumanNoiseEngine(signatureBroken);
+
+  // Pass 14: First paragraph stylometric hardening (no LLM call) — extra opening corrections
+  return firstParagraphStylometricHardening(noised);
 }
