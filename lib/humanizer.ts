@@ -267,6 +267,47 @@ async function mutationPass(
   return callModel(getMutationPrompt(text), MUTATION_SETTINGS);
 }
 
+// ─── Anti-Pattern Destruction ────────────────────────────────────────────────
+// Deterministic post-processing pass — no LLM call.
+// Catches AI-signpost paragraph openers that models re-introduce despite
+// prompt-level suppression. Each pattern maps to a pool of replacements;
+// we cycle through them to avoid creating new repetitions.
+
+const ANTI_PATTERNS: { regex: RegExp; replacements: string[] }[] = [
+  { regex: /^Of course,?\s*/im,         replacements: ["", "Sure — ", "Look, ", "Right — "] },
+  { regex: /^Now,?\s*/im,               replacements: ["", "So ", "At this point, ", "Then again, "] },
+  { regex: /^Here'?s the thing:?\s*/im,  replacements: ["", "The thing is, ", "What matters here: ", "Put simply, "] },
+  { regex: /^In conclusion,?\s*/im,      replacements: ["", "All told, ", "So — ", "Ultimately, "] },
+  { regex: /^Moving toward\s*/im,        replacements: ["", "Shifting to ", "On to ", ""] },
+  { regex: /^Nature,? too,?\s*/im,       replacements: ["Nature ", "The natural side ", "Even nature "] },
+  { regex: /^No exploration of\s*/im,    replacements: ["You can't discuss ", "Any look at ", "It's hard to skip "] },
+  { regex: /^Further south,?\s*/im,      replacements: ["To the south, ", "South of there, ", "Head south and "] },
+  { regex: /^What's more,?\s*/im,        replacements: ["", "On top of that, ", "And ", "Plus, "] },
+  { regex: /^It is worth noting\s*/im,   replacements: ["", "Note that ", "Worth flagging: ", ""] },
+  { regex: /^Importantly,?\s*/im,        replacements: ["", "A key point: ", "What matters — ", ""] },
+  { regex: /^Interestingly,?\s*/im,      replacements: ["", "One thing that stands out — ", "What's notable: ", ""] },
+];
+
+function antiPatternPass(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  let replacementIndex = 0;
+
+  const cleaned = paragraphs.map((para) => {
+    let result = para;
+    for (const { regex, replacements } of ANTI_PATTERNS) {
+      if (regex.test(result)) {
+        const pick = replacements[replacementIndex % replacements.length];
+        result = result.replace(regex, pick);
+        replacementIndex++;
+        break; // one replacement per paragraph — don't stack
+      }
+    }
+    return result;
+  });
+
+  return cleaned.join("\n\n");
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -289,5 +330,8 @@ export async function humanize(
   const merged = semantic.join("\n\n");
 
   // Pass 3: Targeted mutation on full merged text (gated by score)
-  return mutationPass(merged, mode);
+  const mutated = await mutationPass(merged, mode);
+
+  // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
+  return antiPatternPass(mutated);
 }
