@@ -536,6 +536,7 @@ function sentenceAsymmetryPass(text: string): string {
 // Also flattens one sentence per paragraph if all sentences contain flourish.
 
 const RHETORICAL_REPLACEMENTS: [RegExp, string][] = [
+  // Phase 10 originals
   [/\btruly incredible\b/gi, "notable"],
   [/\bdeeply layered\b/gi, "layered"],
   [/\butterly rooted\b/gi, "rooted"],
@@ -561,10 +562,40 @@ const RHETORICAL_REPLACEMENTS: [RegExp, string][] = [
   [/\bunparalleled\b/gi, "unusual"],
   [/\boverarchingly\b/gi, "broadly"],
   [/\binextricably\b/gi, "closely"],
+  // Phase 14 — vocabulary restraint (AI "upgrade" words → plain)
+  [/\bgenuinely\b/gi, "really"],
+  [/\butterly\b/gi, "completely"],
+  [/\bmassive\b/gi, "large"],
+  [/\bgargantuan\b/gi, "very large"],
+  [/\bstartling\b/gi, "surprising"],
+  [/\bpalpable\b/gi, "clear"],
+  [/\bincredibly\b/gi, "very"],
+  [/\bphenomenal\b/gi, "strong"],
+  [/\bstaggering\b/gi, "large"],
+  [/\bimmense\b/gi, "big"],
+  [/\bprofuse\b/gi, "heavy"],
+  [/\bvibrant\b/gi, "lively"],
+  [/\brobust\b/gi, "strong"],
+  [/\bcompelling\b/gi, "strong"],
+  [/\boverwhelmingly\b/gi, "mostly"],
+  [/\bundoubtedly\b/gi, "likely"],
+  [/\bfascinating\b/gi, "interesting"],
+  [/\bexceptionally\b/gi, "very"],
+  [/\bresonates?\b/gi, "connects"],
+  [/\bsignificantly\b/gi, "notably"],
+  [/\bmetamorphos[ei]s\b/gi, "change"],
+  [/\bcatalys[te]\b/gi, "driver"],
+  [/\bparadigm\b/gi, "model"],
+  [/\bholistic\b/gi, "broad"],
+  [/\bsynergy\b/gi, "overlap"],
+  [/\bleverage\b/gi, "use"],
+  [/\binnovative\b/gi, "new"],
+  [/\bcutting[- ]edge\b/gi, "modern"],
+  [/\bstate[- ]of[- ]the[- ]art\b/gi, "current"],
 ];
 
 // Words that mark a sentence as rhetorically "flourished"
-const FLOURISH_MARKERS = /\b(profound|remarkable|extraordinary|transformative|breathtaking|pivotal|unprecedented|paradigm|groundbreaking|indispensable|unparalleled|meticulously|seamlessly|intricate|undeniably)\b/i;
+const FLOURISH_MARKERS = /\b(profound|remarkable|extraordinary|transformative|breathtaking|pivotal|unprecedented|paradigm|groundbreaking|indispensable|unparalleled|meticulously|seamlessly|intricate|undeniably|genuinely|utterly|gargantuan|palpable|phenomenal|staggering|compelling|fascinating|exceptionally)\b/i;
 
 function rhetoricalSuppressionPass(text: string): string {
   // Phase A: Direct phrase replacement
