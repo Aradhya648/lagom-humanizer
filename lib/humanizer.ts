@@ -837,6 +837,121 @@ function humanTraitEngine(text: string): string {
   return result;
 }
 
+// ─── Detector-Weight Implementation ──────────────────────────────────────────
+// Implements specific findings from GPTZero/Originality.ai/QuillBot/ZeroGPT
+// detector analysis. Each sub-pass targets a measurable signal.
+
+// A/B: Opening sentence confidence reduction.
+// Detectors assign highest weight to sentence 1. Flatten it.
+function flattenOpeningSentence(text: string): string {
+  const firstBreak = text.search(/(?<=[.!?])\s+/);
+  if (firstBreak < 0) return text;
+
+  let firstSentence = text.slice(0, firstBreak + 1);
+  const rest = text.slice(firstBreak + 1);
+
+  // Strip leading casual filler from first sentence
+  firstSentence = firstSentence
+    .replace(/^(Look,?\s*|So,?\s+|Here'?s the thing:?\s*|You know,?\s*|Well,?\s*)/i, "")
+    .trim();
+
+  // Strip trailing flourish from first sentence
+  firstSentence = firstSentence
+    .replace(/,?\s+which (is|makes|remains) .+\.$/i, ".")
+    .replace(/\s+—\s+.+\.$/i, ".");
+
+  // Ensure starts with uppercase
+  if (firstSentence.length > 0) {
+    firstSentence = firstSentence.charAt(0).toUpperCase() + firstSentence.slice(1);
+  }
+
+  return firstSentence + " " + rest.trimStart();
+}
+
+// C: Break consecutive upgraded phrases.
+// If two consecutive sentences both contain flourish markers, the second
+// gets its flourish word replaced with a plain equivalent.
+function breakConsecutiveFlourish(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    for (let i = 1; i < sentences.length; i++) {
+      const prevHasFlourish = FLOURISH_MARKERS.test(sentences[i - 1]);
+      const currHasFlourish = FLOURISH_MARKERS.test(sentences[i]);
+
+      if (prevHasFlourish && currHasFlourish) {
+        // Flatten the current sentence's flourish
+        sentences[i] = sentences[i].replace(FLOURISH_MARKERS, (match) => {
+          const plainMap: Record<string, string> = {
+            profound: "real", remarkable: "clear", extraordinary: "unusual",
+            transformative: "big", breathtaking: "striking", pivotal: "key",
+            unprecedented: "new", paradigm: "model", groundbreaking: "new",
+            indispensable: "needed", unparalleled: "rare", meticulously: "carefully",
+            seamlessly: "smoothly", intricate: "detailed", undeniably: "clearly",
+            genuinely: "really", utterly: "completely", gargantuan: "very large",
+            palpable: "clear", phenomenal: "strong", staggering: "large",
+            compelling: "solid", fascinating: "interesting", exceptionally: "very",
+          };
+          return plainMap[match.toLowerCase()] ?? match;
+        });
+      }
+    }
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// D: Vary paragraph energy deliberately.
+// If consecutive paragraphs have similar "energy" (word count within 20%),
+// compress one by trimming its longest sentence at first clause boundary.
+function varyParagraphEnergy(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length < 3) return text;
+
+  const wordCounts = paragraphs.map((p) => p.split(/\s+/).length);
+
+  for (let i = 1; i < paragraphs.length - 1; i++) {
+    const prev = wordCounts[i - 1];
+    const curr = wordCounts[i];
+
+    // Check if energy is too similar to neighbor
+    const ratio = curr / Math.max(prev, 1);
+    if (ratio < 0.8 || ratio > 1.2) continue; // already varied
+
+    // Compress this paragraph by shortening its longest sentence
+    const sentences = getSentences(paragraphs[i]);
+    if (sentences.length < 2) continue;
+
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const maxIdx = lengths.indexOf(Math.max(...lengths));
+
+    if (lengths[maxIdx] > 15) {
+      const sentence = sentences[maxIdx];
+      const commaPos = sentence.indexOf(",", 12);
+      if (commaPos > 0 && commaPos < sentence.length - 10) {
+        sentences[maxIdx] = sentence.slice(0, commaPos) + ".";
+        paragraphs[i] = sentences.join(" ");
+        wordCounts[i] = paragraphs[i].split(/\s+/).length;
+      }
+    }
+  }
+
+  return paragraphs.join("\n\n");
+}
+
+function detectorWeightPass(text: string): string {
+  let result = text;
+  result = flattenOpeningSentence(result);
+  result = breakConsecutiveFlourish(result);
+  result = varyParagraphEnergy(result);
+  return result;
+}
+
 // ─── Low-Mutation Islands ────────────────────────────────────────────────────
 // After all LLM passes, find 1-2 sentences from the original input that
 // closely match sentences in the output (high word overlap) and restore
@@ -972,9 +1087,12 @@ export async function humanize(
   // Pass 7: Human writing trait engine (no LLM call)
   const humanized = humanTraitEngine(suppressed);
 
-  // Pass 8: Low-mutation islands (no LLM call) — restore 1-2 original sentences
-  const islanded = lowMutationIslands(humanized, truncated);
+  // Pass 8: Detector-weight implementation (no LLM call)
+  const detectorHardened = detectorWeightPass(humanized);
 
-  // Pass 9: Length discipline — enforce 90%–110% of input word count
+  // Pass 9: Low-mutation islands (no LLM call) — restore 1-2 original sentences
+  const islanded = lowMutationIslands(detectorHardened, truncated);
+
+  // Pass 10: Length discipline — enforce 90%–110% of input word count
   return enforceLengthDiscipline(islanded, inputWordCount);
 }
