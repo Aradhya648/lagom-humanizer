@@ -72,7 +72,7 @@ WHAT NOT TO DO:
 
 OUTPUT:
 - Output only the rewritten text. No preamble, no labels, no meta-commentary.
-- Match word count within ±15%.
+- STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate. Do not pad. Do not expand.
 - Preserve all paragraph breaks exactly.
 
 TEXT:
@@ -156,7 +156,7 @@ WHAT NOT TO DO:
 
 OUTPUT:
 - Output only the rewritten text. No preamble, no labels, no explanation.
-- Match word count within ±10%.
+- STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate or pad with filler.
 - Preserve all paragraph breaks exactly.
 
 TEXT:
@@ -205,7 +205,7 @@ outliers, not to rewrite clean text. Leave good writing alone.
 
 OUTPUT:
 - Output only the final text. No preamble, no commentary, no labels.
-- Match word count within ±10%.
+- STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate or pad with filler.
 - Preserve all paragraph breaks exactly.
 
 TEXT:

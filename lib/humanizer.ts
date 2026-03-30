@@ -397,6 +397,37 @@ function sentenceAsymmetryPass(text: string): string {
   return processed.join("\n\n");
 }
 
+// ─── Length Discipline ───────────────────────────────────────────────────────
+// If the output exceeds 110% of input word count, trim at the last complete
+// sentence boundary that fits within the budget. Never cuts mid-sentence.
+
+function enforceLengthDiscipline(
+  output: string,
+  inputWordCount: number
+): string {
+  const maxWords = Math.ceil(inputWordCount * 1.10);
+  const outputWords = output.split(/\s+/).length;
+
+  if (outputWords <= maxWords) return output; // within budget
+
+  // Split into sentences and accumulate until budget hit
+  const allSentences = output
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => s.trim().length > 0);
+
+  let wordsSoFar = 0;
+  const kept: string[] = [];
+
+  for (const sentence of allSentences) {
+    const sentenceWords = sentence.split(/\s+/).length;
+    if (wordsSoFar + sentenceWords > maxWords && kept.length > 0) break;
+    kept.push(sentence);
+    wordsSoFar += sentenceWords;
+  }
+
+  return kept.join(" ");
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -405,6 +436,7 @@ export async function humanize(
   wordLimit: number
 ): Promise<string> {
   const truncated = truncateToWordLimit(inputText, wordLimit);
+  const inputWordCount = truncated.split(/\s+/).length;
 
   // Split into variable-size chunks for natural local inconsistency
   const chunks = splitIntoVariableChunks(truncated);
@@ -425,5 +457,8 @@ export async function humanize(
   const cleaned = antiPatternPass(mutated);
 
   // Pass 5: Sentence asymmetry injection (no LLM call)
-  return sentenceAsymmetryPass(cleaned);
+  const asymmetric = sentenceAsymmetryPass(cleaned);
+
+  // Pass 6: Length discipline — enforce 90%–110% of input word count
+  return enforceLengthDiscipline(asymmetric, inputWordCount);
 }
