@@ -952,6 +952,170 @@ function detectorWeightPass(text: string): string {
   return result;
 }
 
+// ─── Deterministic Micro-Surgery ─────────────────────────────────────────────
+// Phase 18: Code-based (no LLM) surgical pass that breaks model-family
+// fingerprint after all generation passes. Three sub-passes:
+//   A) If a paragraph is "too polished" (all sentences fluent, no short/plain
+//      sentence), flatten one sentence by stripping its trailing clause.
+//   B) If two upgraded adjectives appear within 40 words of each other, downgrade
+//      the second one to a plain word.
+//   C) If two consecutive sentences both contain rhetorical connectors, remove
+//      the connector from the second sentence.
+
+// Upgraded adjectives that AI sprinkles in — the "tell" is two appearing close together.
+const UPGRADED_ADJECTIVES: { re: RegExp; plain: string }[] = [
+  { re: /\bsignificant\b/i,   plain: "real" },
+  { re: /\bsubstantial\b/i,   plain: "large" },
+  { re: /\bnotable\b/i,       plain: "clear" },
+  { re: /\bcritical\b/i,      plain: "important" },
+  { re: /\bcomprehensive\b/i, plain: "full" },
+  { re: /\bextensive\b/i,     plain: "wide" },
+  { re: /\bsophisticated\b/i, plain: "complex" },
+  { re: /\bdiverse\b/i,       plain: "varied" },
+  { re: /\bdynamic\b/i,       plain: "active" },
+  { re: /\bessential\b/i,     plain: "needed" },
+  { re: /\bcrucial\b/i,       plain: "key" },
+  { re: /\bvital\b/i,         plain: "key" },
+  { re: /\bstriking\b/i,      plain: "clear" },
+  { re: /\bcomplex\b/i,       plain: "detailed" },
+  { re: /\beffective\b/i,     plain: "useful" },
+];
+
+// Rhetorical connectors that feel editorial when consecutive.
+const RHETORICAL_CONNECTORS = /^(In particular|Specifically|More importantly|Notably|Significantly|What stands out|What matters|The key point|A key factor|Central to this|At the heart of|Fundamentally|Crucially|Critically),?\s+/i;
+
+// Sub-pass A: Flatten one sentence in over-polished paragraphs.
+// "Over-polished" = all sentences ≥15 words with no short/plain sentence.
+function flattenOverPolishedParagraph(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  let flattened = 0;
+
+  const result = paragraphs.map((para) => {
+    if (flattened >= 2) return para; // max 2 flattenings per text
+
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para;
+
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const hasShort = lengths.some((l) => l < 13);
+    if (hasShort) return para; // already has a short sentence — not over-polished
+
+    // All sentences are 13+ words. Flatten a mid-paragraph sentence.
+    const targetIdx = 1 + (flattened % (sentences.length - 2)); // avoid first/last
+    const safeIdx = Math.min(targetIdx, sentences.length - 2);
+    const sentence = sentences[safeIdx];
+
+    // Strategy: truncate at first comma or semicolon after 8+ words
+    const words = sentence.split(/\s+/);
+    if (words.length < 16) return para; // not long enough to truncate safely
+
+    let truncated = sentence;
+    const semicolonPos = sentence.indexOf(";", 20);
+    const commaPos = sentence.indexOf(",", 20);
+    const cutPos = semicolonPos > 0 ? semicolonPos : commaPos;
+
+    if (cutPos > 0 && cutPos < sentence.length - 15) {
+      truncated = sentence.slice(0, cutPos).trimEnd() + ".";
+    }
+
+    if (truncated !== sentence && truncated.split(/\s+/).length >= 6) {
+      sentences[safeIdx] = truncated;
+      flattened++;
+      return sentences.join(" ");
+    }
+
+    return para;
+  });
+
+  return result.join("\n\n");
+}
+
+// Sub-pass B: Adjacent upgraded adjective trimming.
+// Scans the full text for two upgraded adjectives within a 40-word window.
+// Downgrades the second occurrence to its plain equivalent.
+function trimAdjacentUpgradedAdjectives(text: string): string {
+  // Find all upgraded adjective positions
+  const matches: { index: number; length: number; adjIdx: number }[] = [];
+  for (let ai = 0; ai < UPGRADED_ADJECTIVES.length; ai++) {
+    const { re } = UPGRADED_ADJECTIVES[ai];
+    const globalRe = new RegExp(re.source, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = globalRe.exec(text)) !== null) {
+      matches.push({ index: m.index, length: m[0].length, adjIdx: ai });
+    }
+  }
+
+  if (matches.length < 2) return text;
+  matches.sort((a, b) => a.index - b.index);
+
+  // Find pairs within 40-word windows and mark the second for downgrade
+  const toReplace = new Set<number>(); // indices into matches[]
+  for (let i = 0; i < matches.length - 1; i++) {
+    if (toReplace.has(i)) continue;
+    const span = text.slice(matches[i].index, matches[i + 1].index + matches[i + 1].length);
+    const wordsBetween = span.split(/\s+/).length;
+    if (wordsBetween <= 40) {
+      toReplace.add(i + 1); // mark the second one
+    }
+  }
+
+  if (toReplace.size === 0) return text;
+
+  // Apply replacements from end to start to preserve indices
+  const sortedReplacements = [...toReplace].sort((a, b) => matches[b].index - matches[a].index);
+  let result = text;
+  for (const mi of sortedReplacements) {
+    const { index, length, adjIdx } = matches[mi];
+    const original = result.slice(index, index + length);
+    let plain = UPGRADED_ADJECTIVES[adjIdx].plain;
+    // Preserve capitalisation
+    if (original[0] === original[0].toUpperCase()) {
+      plain = plain.charAt(0).toUpperCase() + plain.slice(1);
+    }
+    result = result.slice(0, index) + plain + result.slice(index + length);
+  }
+
+  return result;
+}
+
+// Sub-pass C: Consecutive rhetorical connector reduction.
+// If two adjacent sentences both start with rhetorical connectors, strip
+// the connector from the second sentence.
+function reduceConsecutiveRhetoricalConnectors(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    for (let i = 1; i < sentences.length; i++) {
+      const prevHas = RHETORICAL_CONNECTORS.test(sentences[i - 1]);
+      const currHas = RHETORICAL_CONNECTORS.test(sentences[i]);
+
+      if (prevHas && currHas) {
+        // Strip the connector from the current sentence
+        const stripped = sentences[i].replace(RHETORICAL_CONNECTORS, "");
+        if (stripped.length > 10) {
+          sentences[i] = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+        }
+      }
+    }
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// Master micro-surgery pass — applies all three sub-passes.
+function deterministicMicroSurgery(text: string): string {
+  let result = text;
+  result = flattenOverPolishedParagraph(result);
+  result = trimAdjacentUpgradedAdjectives(result);
+  result = reduceConsecutiveRhetoricalConnectors(result);
+  return result;
+}
+
 // ─── Low-Mutation Islands ────────────────────────────────────────────────────
 // After all LLM passes, find 1-2 sentences from the original input that
 // closely match sentences in the output (high word overlap) and restore
@@ -1090,8 +1254,11 @@ export async function humanize(
   // Pass 8: Detector-weight implementation (no LLM call)
   const detectorHardened = detectorWeightPass(humanized);
 
+  // Pass 8b: Deterministic micro-surgery (no LLM call) — break model-family fingerprint
+  const surgeryResult = deterministicMicroSurgery(detectorHardened);
+
   // Pass 9: Low-mutation islands (no LLM call) — restore 1-2 original sentences
-  const islanded = lowMutationIslands(detectorHardened, truncated);
+  const islanded = lowMutationIslands(surgeryResult, truncated);
 
   // Pass 10: Length discipline — enforce 90%–110% of input word count
   return enforceLengthDiscipline(islanded, inputWordCount);
