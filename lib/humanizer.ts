@@ -1765,6 +1765,190 @@ function sentenceSignatureBreaker(text: string): string {
   return result.join("\n\n");
 }
 
+// ─── Micro Human Noise Engine ────────────────────────────────────────────────
+// Phase 22: Introduces controlled, minimal irregularities that mimic human
+// writing imperfection without harming readability.
+//
+// Three noise types — each applied at most once or twice per text:
+// A) One shorter factual sentence injected into a paragraph that lacks one
+// B) One restrained word repetition (echo a key noun from prior sentence)
+// C) One flat/abrupt paragraph ending (strip tidy wrap-up)
+//
+// Never random chaos — each noise type is gated by structural analysis.
+
+// Noise A: Ensure at least one paragraph has a noticeably short (<10 word)
+// sentence. If no paragraph has one, pick the paragraph with the most
+// uniform sentence lengths and insert a short bridging sentence.
+const SHORT_BRIDGES = [
+  "That part matters.",
+  "This changed things.",
+  "It shows.",
+  "The difference is real.",
+  "That stood out.",
+  "Not everyone agrees.",
+  "The data backs this up.",
+  "Worth noting.",
+  "Simple as that.",
+  "And it works.",
+];
+
+function noiseShortSentence(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  // Check if any paragraph already has a very short sentence
+  const hasShort = paragraphs.some((para) => {
+    const sentences = getSentences(para);
+    return sentences.some((s) => s.split(/\s+/).length <= 8);
+  });
+
+  if (hasShort) return text; // already has natural short sentence — skip
+
+  // Find the most uniform paragraph (lowest length std dev)
+  let bestIdx = -1;
+  let lowestDev = Infinity;
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    const sentences = getSentences(paragraphs[i]);
+    if (sentences.length < 3) continue;
+
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const avg = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+    const dev = Math.sqrt(
+      lengths.reduce((sum, l) => sum + Math.pow(l - avg, 2), 0) / lengths.length
+    );
+
+    if (dev < lowestDev) {
+      lowestDev = dev;
+      bestIdx = i;
+    }
+  }
+
+  if (bestIdx < 0) return text;
+
+  // Insert a short bridge sentence at position 2 (after second sentence)
+  const sentences = getSentences(paragraphs[bestIdx]);
+  if (sentences.length < 3) return text;
+
+  const bridge = SHORT_BRIDGES[bestIdx % SHORT_BRIDGES.length];
+  sentences.splice(2, 0, bridge);
+  paragraphs[bestIdx] = sentences.join(" ");
+
+  return paragraphs.join("\n\n");
+}
+
+// Noise B: Restrained word repetition.
+// Humans naturally echo a key word from one sentence in the next.
+// Find one place where two adjacent sentences share zero content words
+// and echo one content word from the first into the second.
+function noiseWordEcho(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  let applied = false;
+
+  const result = paragraphs.map((para) => {
+    if (applied) return para;
+
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para;
+
+    for (let i = 0; i < sentences.length - 1; i++) {
+      const wordsA = sentences[i]
+        .toLowerCase()
+        .replace(/[^a-z\s]/g, "")
+        .split(/\s+/)
+        .filter((w) => w.length > 4 && !STOP_WORDS.has(w));
+
+      const wordsB = new Set(
+        sentences[i + 1]
+          .toLowerCase()
+          .replace(/[^a-z\s]/g, "")
+          .split(/\s+/)
+      );
+
+      // Check if zero content words overlap
+      const overlap = wordsA.filter((w) => wordsB.has(w));
+      if (overlap.length > 0) continue; // already has natural echo
+
+      // Pick a content word from sentence A to echo
+      if (wordsA.length === 0) continue;
+      const echoWord = wordsA[Math.floor(wordsA.length / 2)];
+
+      // Prepend an echo phrase to sentence B
+      const nextSentence = sentences[i + 1];
+      sentences[i + 1] = `That ${echoWord} ` +
+        nextSentence.charAt(0).toLowerCase() + nextSentence.slice(1);
+
+      // Fix: if the sentence already started with a capital word like "The", it's fine
+      // but if it started with a proper noun, revert
+      if (/^That \w+ [A-Z][a-z]/.test(sentences[i + 1])) {
+        sentences[i + 1] = nextSentence; // revert — would sound awkward
+        continue;
+      }
+
+      applied = true;
+      break;
+    }
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// Noise C: One flat paragraph ending.
+// If the last sentence of a mid-text paragraph is long (>20 words) and
+// contains a wrap-up pattern, replace it with a truncated version that
+// ends abruptly. Applied to at most one paragraph.
+const WRAPUP_PATTERNS = [
+  /,?\s+which (ultimately|collectively|together|broadly|overall) .+\.$/i,
+  /,?\s+demonstrating .+\.$/i,
+  /,?\s+highlighting .+\.$/i,
+  /,?\s+underscoring .+\.$/i,
+  /,?\s+reflecting .+\.$/i,
+  /,?\s+illustrating .+\.$/i,
+  /,?\s+suggesting .+\.$/i,
+  /,?\s+ensuring .+\.$/i,
+];
+
+function noiseFlatEnding(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  let applied = false;
+
+  const result = paragraphs.map((para, idx) => {
+    // Skip first and last paragraph
+    if (applied || idx === 0 || idx === paragraphs.length - 1) return para;
+
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    const lastSentence = sentences[sentences.length - 1];
+    if (lastSentence.split(/\s+/).length < 18) return para;
+
+    for (const pattern of WRAPUP_PATTERNS) {
+      if (pattern.test(lastSentence)) {
+        const flattened = lastSentence.replace(pattern, ".");
+        if (flattened.split(/\s+/).length >= 6) {
+          sentences[sentences.length - 1] = flattened;
+          applied = true;
+          return sentences.join(" ");
+        }
+      }
+    }
+
+    return para;
+  });
+
+  return result.join("\n\n");
+}
+
+// Master micro noise engine — applies all three noise types.
+function microHumanNoiseEngine(text: string): string {
+  let result = text;
+  result = noiseShortSentence(result);
+  result = noiseWordEcho(result);
+  result = noiseFlatEnding(result);
+  return result;
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -1827,5 +2011,8 @@ export async function humanize(
   const styloCorrected = stylometricCorrectionLayer(lengthEnforced);
 
   // Pass 12: Sentence signature breaker (no LLM call) — break local rhythm fingerprint
-  return sentenceSignatureBreaker(styloCorrected);
+  const signatureBroken = sentenceSignatureBreaker(styloCorrected);
+
+  // Pass 13: Micro human noise engine (no LLM call) — controlled irregularities
+  return microHumanNoiseEngine(signatureBroken);
 }
