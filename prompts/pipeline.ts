@@ -28,7 +28,8 @@ const SEMANTIC_HINTS = [
 export function getStructuralPrompt(
   text: string,
   mode: HumanizeMode,
-  chunkIndex?: number
+  chunkIndex?: number,
+  annotatedText?: string
 ): string {
   const scope: Record<HumanizeMode, string> = {
     light:
@@ -44,13 +45,26 @@ export function getStructuralPrompt(
       ? `\nSECTION FOCUS: ${STRUCTURAL_HINTS[chunkIndex % STRUCTURAL_HINTS.length]}`
       : "";
 
+  const classificationBlock = annotatedText
+    ? `
+SENTENCE CLASSIFICATION (follow these rewrite intensities):
+Each sentence is tagged [A], [B], or [C]:
+  [A] = Plain factual — leave nearly untouched. Only fix if structurally identical to neighbor.
+  [B] = Medium synthetic — moderate restructuring allowed.
+  [C] = High-risk synthetic — full restructuring required.
+Not every sentence should feel rewritten. Preserve [A] sentences almost exactly.
+
+`
+    : "";
+
+  const textToUse = annotatedText ?? text;
+
   return `You are a structural copy editor. Your only task is sentence rhythm and syntax. Do not touch word choices, phrases, or meaning.
 
 TASK: Restructure the sentences below so they no longer sound uniform and machine-generated.
 
 SCOPE: ${scope[mode]}${hint}
-
-WHAT TO DO:
+${classificationBlock}WHAT TO DO:
 - Vary sentence lengths drastically. AI writes all sentences at similar word counts. Break that — some sentences should be short (under 12 words), some long (25+).
 - Split compound sentences that chain parallel clauses: "X does A, Y does B, and Z does C" — split or restructure these.
 - Merge short choppy sentences that belong together into one longer flowing sentence.
@@ -72,11 +86,12 @@ WHAT NOT TO DO:
 
 OUTPUT:
 - Output only the rewritten text. No preamble, no labels, no meta-commentary.
+- Remove all [A], [B], [C] tags from the output — they are instructions only.
 - STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate. Do not pad. Do not expand.
 - Preserve all paragraph breaks exactly.
 
 TEXT:
-${text}`;
+${textToUse}`;
 }
 
 // ─── Pass 2: Semantic Naturalness ────────────────────────────────────────────

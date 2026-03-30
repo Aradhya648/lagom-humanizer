@@ -4,7 +4,7 @@ import {
   getStructuralPrompt,
   getSemanticPrompt,
   getMutationPrompt,
-  HumanizeMode,
+  type HumanizeMode,
 } from "@/prompts/pipeline";
 
 export type { HumanizeMode };
@@ -85,6 +85,79 @@ export function splitIntoVariableChunks(text: string): string[] {
   }
 
   return chunks.length > 0 ? chunks : [text.trim()];
+}
+
+// ─── Sentence Classification ─────────────────────────────────────────────────
+// Classifies each sentence as:
+//   A = plain factual (low AI signal → minimal rewrite)
+//   B = medium synthetic (moderate AI signal → moderate rewrite)
+//   C = high-risk synthetic (strong AI signal → full rewrite)
+//
+// Classification heuristics based on what GPTZero/Originality.ai weight:
+//   - Filler phrases → C
+//   - Formal connectors at sentence start → C
+//   - Very uniform sentence length matching neighbors → B
+//   - Short, direct, factual statements → A
+//   - Sentences under 10 words → A (too short to carry AI signal)
+
+const SENTENCE_FILLER_RE = /\b(it is important to note|it is worth noting|furthermore|moreover|additionally|consequently|in conclusion|it is crucial|it is essential|delve into|in today's world|plays a crucial role|plays a vital role)\b/i;
+const SENTENCE_FORMAL_OPENER_RE = /^(However|Moreover|Furthermore|Additionally|Consequently|Nevertheless|It is important|It is worth|In conclusion|In summary)\b/i;
+
+export type SentenceClass = "A" | "B" | "C";
+
+export function classifySentence(
+  sentence: string,
+  avgNeighborLength?: number
+): SentenceClass {
+  const words = sentence.split(/\s+/).length;
+
+  // Very short sentences → plain factual, skip rewrite
+  if (words <= 10) return "A";
+
+  // Contains filler phrases → high-risk
+  if (SENTENCE_FILLER_RE.test(sentence)) return "C";
+
+  // Starts with formal connector → high-risk
+  if (SENTENCE_FORMAL_OPENER_RE.test(sentence)) return "C";
+
+  // Uniform length relative to neighbors → medium risk
+  if (avgNeighborLength !== undefined) {
+    const ratio = words / avgNeighborLength;
+    if (ratio > 0.85 && ratio < 1.15) return "B"; // suspiciously uniform
+  }
+
+  // Short-to-medium plain statements → keep
+  if (words <= 16) return "A";
+
+  // Default medium
+  return "B";
+}
+
+// Classify all sentences in a chunk and produce annotated text for the prompt.
+export function annotateChunkWithClasses(chunk: string): {
+  annotated: string;
+  classes: SentenceClass[];
+} {
+  const sentences = getSentences(chunk);
+  if (sentences.length === 0) return { annotated: chunk, classes: [] };
+
+  const lengths = sentences.map((s) => s.split(/\s+/).length);
+  const classes: SentenceClass[] = sentences.map((s, i) => {
+    // Avg length of neighbors (excluding self)
+    const neighbors = lengths.filter((_, j) => j !== i && Math.abs(j - i) <= 1);
+    const avgNeighbor =
+      neighbors.length > 0
+        ? neighbors.reduce((a, b) => a + b, 0) / neighbors.length
+        : undefined;
+    return classifySentence(s, avgNeighbor);
+  });
+
+  // Build annotated text with inline tags
+  const annotated = sentences
+    .map((s, i) => `[${classes[i]}] ${s}`)
+    .join("\n");
+
+  return { annotated, classes };
 }
 
 // ─── Generation Settings ─────────────────────────────────────────────────────
@@ -217,17 +290,23 @@ function validateChunkOutput(output: string, fallback: string): string {
 // Uses high-diversity settings: unconstrained topK, high topP, frequencyPenalty.
 // Per-chunk failures fall back to the original chunk text — a single bad API
 // call should not abort the entire request.
+// Phase 13: Annotates each chunk with sentence classifications (A/B/C) so the
+// LLM knows which sentences to preserve vs. rewrite aggressively.
 async function structuralPass(
   chunks: string[],
   mode: HumanizeMode
 ): Promise<string[]> {
   const settings = STRUCTURAL_SETTINGS[mode];
   return Promise.all(
-    chunks.map((chunk, i) =>
-      callModel(getStructuralPrompt(chunk, mode, i), settings)
+    chunks.map((chunk, i) => {
+      const { annotated } = annotateChunkWithClasses(chunk);
+      return callModel(
+        getStructuralPrompt(chunk, mode, i, annotated),
+        settings
+      )
         .then((out) => validateChunkOutput(out, chunk))
-        .catch(() => chunk) // fall back to original on any failure
-    )
+        .catch(() => chunk);
+    })
   );
 }
 
