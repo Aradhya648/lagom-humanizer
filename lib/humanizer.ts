@@ -441,6 +441,79 @@ function antiPatternPass(text: string): string {
   return cleaned.join("\n\n");
 }
 
+// ─── Filler Distribution Control ─────────────────────────────────────────────
+// Deterministic pass — no LLM call.
+// Prevents conversational paragraph openers from appearing too uniformly.
+// If >30% of paragraphs start with casual filler, strip excess openers.
+
+const CASUAL_OPENERS = [
+  /^(You know,?\s*)/i,
+  /^(Take\s)/i,
+  /^(And\s)/i,
+  /^(But\s)/i,
+  /^(Look,?\s*)/i,
+  /^(See,?\s*)/i,
+  /^(So,?\s+)/i,
+  /^(Sure,?\s*)/i,
+  /^(Right,?\s*)/i,
+  /^(Well,?\s*)/i,
+  /^(Honestly,?\s*)/i,
+  /^(Listen,?\s*)/i,
+  /^(Thing is,?\s*)/i,
+  /^(I mean,?\s*)/i,
+];
+
+function fillerDistributionPass(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length < 3) return text;
+
+  // Identify which paragraphs have casual openers
+  const hasOpener = paragraphs.map((para) =>
+    CASUAL_OPENERS.some((re) => re.test(para))
+  );
+  const openerCount = hasOpener.filter(Boolean).length;
+  const ratio = openerCount / paragraphs.length;
+
+  // Only act if casual openers exceed 30% of paragraphs
+  if (ratio <= 0.3) return text;
+
+  // Target: reduce to ~25% by stripping openers from mid-text paragraphs
+  const targetKeep = Math.floor(paragraphs.length * 0.25);
+  let kept = 0;
+
+  const result = paragraphs.map((para, idx) => {
+    if (!hasOpener[idx]) return para;
+
+    // Always keep first and last paragraph openers if they have them
+    if (idx === 0 || idx === paragraphs.length - 1) {
+      kept++;
+      return para;
+    }
+
+    // Keep up to targetKeep openers, strip the rest
+    if (kept < targetKeep) {
+      kept++;
+      return para;
+    }
+
+    // Strip the opener — capitalise the remaining text
+    let stripped = para;
+    for (const re of CASUAL_OPENERS) {
+      const match = stripped.match(re);
+      if (match) {
+        stripped = stripped.slice(match[0].length);
+        if (stripped.length > 0) {
+          stripped = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+        }
+        break;
+      }
+    }
+    return stripped;
+  });
+
+  return result.join("\n\n");
+}
+
 // ─── Sentence Asymmetry Injection ────────────────────────────────────────────
 // Deterministic pass — no LLM call.
 // Ensures each paragraph with 3+ sentences contains at least one noticeably
@@ -826,8 +899,11 @@ export async function humanize(
   // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
   const cleaned = antiPatternPass(hardened);
 
+  // Pass 4b: Filler distribution control (no LLM call)
+  const fillerControlled = fillerDistributionPass(cleaned);
+
   // Pass 5: Sentence asymmetry injection (no LLM call)
-  const asymmetric = sentenceAsymmetryPass(cleaned);
+  const asymmetric = sentenceAsymmetryPass(fillerControlled);
 
   // Pass 6: Rhetorical fluency suppression (no LLM call)
   const suppressed = rhetoricalSuppressionPass(asymmetric);
