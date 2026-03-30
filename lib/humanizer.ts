@@ -1613,6 +1613,158 @@ function stylometricCorrectionLayer(text: string): string {
   return corrected.join("\n\n");
 }
 
+// ─── Sentence Signature Breaker ─────────────────────────────────────────────
+// Phase 21: Detects consecutive sentences that share a similar "signature" —
+// similar word count, similar punctuation shape, and similar rhetorical
+// energy. When two adjacent sentences match on all three axes, one is
+// mutated deterministically to break the local rhythm fingerprint.
+//
+// Signature = { length bucket, punctuation pattern, energy level }
+// Two sentences "match" if all three components are identical.
+
+type LengthBucket = "short" | "medium" | "long" | "very_long";
+type PunctuationShape = "simple" | "one_break" | "multi_break" | "complex";
+type EnergyLevel = "flat" | "moderate" | "elevated";
+
+function lengthBucket(wordCount: number): LengthBucket {
+  if (wordCount <= 10) return "short";
+  if (wordCount <= 20) return "medium";
+  if (wordCount <= 30) return "long";
+  return "very_long";
+}
+
+function punctuationShape(sentence: string): PunctuationShape {
+  const commas = (sentence.match(/,/g) || []).length;
+  const semis = (sentence.match(/;/g) || []).length;
+  const dashes = (sentence.match(/—/g) || []).length;
+  const colons = (sentence.match(/:/g) || []).length;
+  const total = commas + semis + dashes + colons;
+
+  if (total === 0) return "simple";
+  if (total === 1) return "one_break";
+  if (total <= 3) return "multi_break";
+  return "complex";
+}
+
+function energyLevel(sentence: string): EnergyLevel {
+  let energy = 0;
+
+  // Flourish/upgrade words add energy
+  if (FLOURISH_MARKERS.test(sentence)) energy += 2;
+
+  // Exclamation or question marks add energy
+  if (/[!?]/.test(sentence)) energy += 1;
+
+  // Intensifiers add energy
+  if (/\b(very|really|truly|absolutely|completely|entirely|extremely)\b/i.test(sentence)) energy += 1;
+
+  // Formal connectors add energy (elevated register)
+  if (/\b(however|moreover|furthermore|nevertheless|consequently)\b/i.test(sentence)) energy += 1;
+
+  if (energy === 0) return "flat";
+  if (energy <= 2) return "moderate";
+  return "elevated";
+}
+
+interface SentenceSignature {
+  length: LengthBucket;
+  punctuation: PunctuationShape;
+  energy: EnergyLevel;
+}
+
+function getSignature(sentence: string): SentenceSignature {
+  const words = sentence.split(/\s+/).length;
+  return {
+    length: lengthBucket(words),
+    punctuation: punctuationShape(sentence),
+    energy: energyLevel(sentence),
+  };
+}
+
+function signaturesMatch(a: SentenceSignature, b: SentenceSignature): boolean {
+  return a.length === b.length && a.punctuation === b.punctuation && a.energy === b.energy;
+}
+
+// Mutation strategies for breaking a matching signature:
+// 1. If sentence has a comma, split at comma and keep first half (shorten)
+// 2. If sentence starts with a connector, strip it
+// 3. If sentence has a semicolon, convert to period (changes punctuation shape)
+// 4. Prepend a short bridge word to shift length bucket
+function mutateSentenceSignature(sentence: string): string {
+  const words = sentence.split(/\s+/);
+
+  // Strategy 1: If long enough and has comma, truncate at first comma after word 6
+  if (words.length > 14) {
+    const commaPos = sentence.indexOf(",", 15);
+    if (commaPos > 0 && commaPos < sentence.length - 20) {
+      return sentence.slice(0, commaPos).trimEnd() + ".";
+    }
+  }
+
+  // Strategy 2: Strip leading connector to change energy
+  const connectorMatch = sentence.match(/^(However|Moreover|Furthermore|Additionally|Nevertheless|Consequently|Indeed|Still|Yet),?\s+/i);
+  if (connectorMatch) {
+    const rest = sentence.slice(connectorMatch[0].length);
+    return rest.charAt(0).toUpperCase() + rest.slice(1);
+  }
+
+  // Strategy 3: Convert semicolon to period
+  const semiPos = sentence.indexOf(";");
+  if (semiPos > 0) {
+    const before = sentence.slice(0, semiPos).trimEnd();
+    const after = sentence.slice(semiPos + 1).trimStart();
+    if (after.length > 10) {
+      return before + ". " + after.charAt(0).toUpperCase() + after.slice(1);
+    }
+  }
+
+  // Strategy 4: If medium-length, make shorter by trimming trailing clause
+  if (words.length >= 15 && words.length <= 25) {
+    for (const pattern of TRAILING_EXTENSIONS) {
+      if (pattern.test(sentence)) {
+        const trimmed = sentence.replace(pattern, ".");
+        if (trimmed.split(/\s+/).length >= 7) return trimmed;
+      }
+    }
+  }
+
+  return sentence; // no mutation available
+}
+
+function sentenceSignatureBreaker(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalMutations = 0;
+  const maxMutations = 4; // cap total mutations across entire text
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    const signatures = sentences.map(getSignature);
+    let mutated = false;
+
+    for (let i = 1; i < sentences.length; i++) {
+      if (totalMutations >= maxMutations) break;
+      if (mutated) break; // max one mutation per paragraph
+
+      if (signaturesMatch(signatures[i - 1], signatures[i])) {
+        // Mutate the second sentence of the matching pair
+        const original = sentences[i];
+        const changed = mutateSentenceSignature(original);
+        if (changed !== original) {
+          sentences[i] = changed;
+          totalMutations++;
+          mutated = true;
+        }
+      }
+    }
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -1672,5 +1824,8 @@ export async function humanize(
   const lengthEnforced = enforceLengthDiscipline(islanded, inputWordCount);
 
   // Pass 11: Stylometric correction layer (no LLM call) — selective rule-shaped surgery
-  return stylometricCorrectionLayer(lengthEnforced);
+  const styloCorrected = stylometricCorrectionLayer(lengthEnforced);
+
+  // Pass 12: Sentence signature breaker (no LLM call) — break local rhythm fingerprint
+  return sentenceSignatureBreaker(styloCorrected);
 }
