@@ -308,6 +308,95 @@ function antiPatternPass(text: string): string {
   return cleaned.join("\n\n");
 }
 
+// ─── Sentence Asymmetry Injection ────────────────────────────────────────────
+// Deterministic pass — no LLM call.
+// Ensures each paragraph with 3+ sentences contains at least one noticeably
+// shorter/plainer sentence. Prevents the "every sentence equally polished"
+// AI fingerprint.
+//
+// Strategy:
+//   1. Split paragraph into sentences.
+//   2. If all sentences are within ±30% of the mean word count, the paragraph
+//      is too uniform — pick one mid-paragraph sentence and shorten it.
+//   3. Shortening: strip leading adverbial phrases, remove trailing qualifiers,
+//      or truncate to the first clause.
+
+// Trim common leading filler from a sentence to make it more direct.
+const LEADING_FILLER = [
+  /^(However|Moreover|Furthermore|Additionally|Consequently|Nevertheless|Indeed|Notably|Ultimately|Essentially|Fundamentally),?\s+/i,
+  /^(It is|It's) (important|worth noting|clear|evident|crucial|essential) (to note |that )?/i,
+  /^(In fact|As a result|For this reason|On the other hand|At the same time|In other words),?\s+/i,
+  /^(What this means is|What's interesting is|The key thing is|The reality is|The point is),?\s+/i,
+];
+
+// Trim trailing qualifiers that add polish without substance.
+const TRAILING_QUALIFIERS = [
+  /,?\s+(which (is|makes|has been|remains) (particularly|especially|truly|quite|rather|deeply) (important|significant|notable|relevant|interesting))\.$/i,
+  /,?\s+(and this (is|remains|has been) (particularly|especially|quite) (true|evident|clear|notable))\.$/i,
+];
+
+function shortenSentence(sentence: string): string {
+  let result = sentence;
+
+  // Strip one leading filler pattern
+  for (const pattern of LEADING_FILLER) {
+    const stripped = result.replace(pattern, "");
+    if (stripped !== result && stripped.length > 10) {
+      // Capitalise the new start
+      result = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+      break;
+    }
+  }
+
+  // Strip one trailing qualifier
+  for (const pattern of TRAILING_QUALIFIERS) {
+    const stripped = result.replace(pattern, ".");
+    if (stripped !== result) {
+      result = stripped;
+      break;
+    }
+  }
+
+  // If still long (>25 words), try truncating to first clause
+  const words = result.split(/\s+/);
+  if (words.length > 25) {
+    const commaIdx = result.indexOf(",", 20);
+    if (commaIdx > 0 && commaIdx < result.length - 15) {
+      result = result.slice(0, commaIdx) + ".";
+    }
+  }
+
+  return result;
+}
+
+function sentenceAsymmetryPass(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const processed = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para; // too short to need asymmetry
+
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const avg = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+
+    // Check if all sentences are within ±30% of mean (too uniform)
+    const isUniform = lengths.every(
+      (l) => l >= avg * 0.7 && l <= avg * 1.3
+    );
+
+    if (!isUniform) return para; // already has natural asymmetry
+
+    // Pick a mid-paragraph sentence to flatten (not first or last)
+    const targetIdx = Math.floor(sentences.length / 2);
+    const shortened = shortenSentence(sentences[targetIdx]);
+    sentences[targetIdx] = shortened;
+
+    return sentences.join(" ");
+  });
+
+  return processed.join("\n\n");
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -333,5 +422,8 @@ export async function humanize(
   const mutated = await mutationPass(merged, mode);
 
   // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
-  return antiPatternPass(mutated);
+  const cleaned = antiPatternPass(mutated);
+
+  // Pass 5: Sentence asymmetry injection (no LLM call)
+  return sentenceAsymmetryPass(cleaned);
 }
