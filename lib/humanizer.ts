@@ -267,6 +267,60 @@ async function mutationPass(
   return callModel(getMutationPrompt(text), MUTATION_SETTINGS);
 }
 
+// ─── First-Paragraph Hardening ───────────────────────────────────────────────
+// Detectors weight the first 150-200 words most heavily. If the opening
+// paragraph still scores high after all passes, give it an extra targeted
+// mutation round. This adds at most 1 LLM call.
+
+async function firstParagraphHardening(
+  text: string,
+  mode: HumanizeMode
+): Promise<string> {
+  if (mode === "light") return text;
+
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length === 0) return text;
+
+  const firstPara = paragraphs[0];
+  const { score } = detectAI(firstPara);
+
+  // Threshold: first paragraph needs to be cleaner than the rest
+  const threshold = mode === "aggressive" ? 35 : 45;
+  if (score <= threshold) return text;
+
+  // Extra mutation specifically for the first paragraph
+  const prompt = `You are doing a final cleanup pass on the OPENING PARAGRAPH only of a piece of writing. This paragraph needs to read as clearly human-written because it gets the most scrutiny.
+
+TASK: Rewrite only to fix these specific issues:
+- If two consecutive sentences start the same way, fix one opener.
+- If all sentences are similar lengths, make one noticeably shorter or longer.
+- If any formal connector appears (however/therefore/moreover), replace or remove it.
+- If the paragraph ends with a tidy summary sentence, make it end more abruptly.
+
+Do NOT restructure the paragraph. Do NOT change meaning. Fix only what is listed above.
+
+OUTPUT: Only the rewritten paragraph. No preamble, no labels.
+
+PARAGRAPH:
+${firstPara}`;
+
+  try {
+    const improved = await callModel(prompt, {
+      temperature: 0.85,
+      topP: 0.92,
+      topK: 35,
+      frequencyPenalty: 0.25,
+    });
+    if (improved.trim().length > 0) {
+      paragraphs[0] = improved.trim();
+    }
+  } catch {
+    // If the extra call fails, keep the original first paragraph
+  }
+
+  return paragraphs.join("\n\n");
+}
+
 // ─── Anti-Pattern Destruction ────────────────────────────────────────────────
 // Deterministic post-processing pass — no LLM call.
 // Catches AI-signpost paragraph openers that models re-introduce despite
@@ -656,8 +710,11 @@ export async function humanize(
   // Pass 3: Targeted mutation on full merged text (gated by score)
   const mutated = await mutationPass(merged, mode);
 
+  // Pass 3b: First-paragraph hardening (extra mutation if opener still scores high)
+  const hardened = await firstParagraphHardening(mutated, mode);
+
   // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
-  const cleaned = antiPatternPass(mutated);
+  const cleaned = antiPatternPass(hardened);
 
   // Pass 5: Sentence asymmetry injection (no LLM call)
   const asymmetric = sentenceAsymmetryPass(cleaned);
