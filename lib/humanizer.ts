@@ -233,7 +233,7 @@ async function callGemini(prompt: string, settings: GenSettings): Promise<string
 async function callHuggingFace(prompt: string): Promise<string> {
   const apiKey = process.env.HUGGINGFACE_API_KEY;
   const HF_API_URL =
-    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2";
+    "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2";
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -1116,6 +1116,162 @@ function deterministicMicroSurgery(text: string): string {
   return result;
 }
 
+// ─── Multi-Detector Hardening ────────────────────────────────────────────────
+// Phase 19: Targets statistical signals that GPTZero, ZeroGPT, QuillBot, and
+// Originality.ai use but our internal detector doesn't fully capture.
+// Three sub-passes — all deterministic, no LLM calls.
+
+// Sub-pass A: N-gram frequency suppression.
+// AI text reuses the same 2-word combos (bigrams) at much higher rates than
+// human text. Find bigrams that appear 3+ times and replace excess occurrences
+// with light paraphrases.
+const OVERUSED_BIGRAMS: { bigram: string; replacements: string[] }[] = [
+  { bigram: "would likely",    replacements: ["will probably", "could well", "might"] },
+  { bigram: "tend to",         replacements: ["often", "usually", "frequently"] },
+  { bigram: "in order",        replacements: ["to", "so as to", "for"] },
+  { bigram: "as well",         replacements: ["too", "also", "on top of that"] },
+  { bigram: "due to",          replacements: ["because of", "thanks to", "from"] },
+  { bigram: "such as",         replacements: ["like", "including", "for example"] },
+  { bigram: "it is",           replacements: ["it's", "this is", "that's"] },
+  { bigram: "there is",        replacements: ["there's", "you'll find", "we see"] },
+  { bigram: "there are",       replacements: ["there're", "you'll find", "we see"] },
+  { bigram: "has been",        replacements: ["was", "has turned out", "became"] },
+  { bigram: "can be",          replacements: ["is sometimes", "may be", "often is"] },
+  { bigram: "one of",          replacements: ["among", "a top", "a major"] },
+  { bigram: "need to",         replacements: ["must", "should", "have to"] },
+  { bigram: "able to",         replacements: ["can", "capable of", "in a position to"] },
+  { bigram: "important to",    replacements: ["worth", "key to", "useful to"] },
+];
+
+function ngramFrequencySuppression(text: string): string {
+  let result = text;
+
+  for (const { bigram, replacements } of OVERUSED_BIGRAMS) {
+    const regex = new RegExp(`\\b${bigram}\\b`, "gi");
+    const matches = [...result.matchAll(regex)];
+
+    if (matches.length < 3) continue; // only suppress if 3+ occurrences
+
+    // Keep first occurrence, replace alternating excess from the end
+    let replaceCount = 0;
+    const maxReplacements = Math.floor(matches.length / 2); // replace ~half
+
+    // Process matches from end to preserve string indices
+    for (let i = matches.length - 1; i >= 1 && replaceCount < maxReplacements; i -= 2) {
+      const match = matches[i];
+      if (match.index === undefined) continue;
+      const replacement = replacements[replaceCount % replacements.length];
+      result =
+        result.slice(0, match.index) +
+        replacement +
+        result.slice(match.index + match[0].length);
+      replaceCount++;
+    }
+  }
+
+  return result;
+}
+
+// Sub-pass B: Predictable continuation breaker.
+// AI frequently produces stock opening patterns with extremely high token
+// continuation probability. Break them by rewriting the pattern.
+const PREDICTABLE_PATTERNS: [RegExp, string][] = [
+  [/\bOne of the most (important|significant|critical|notable)\b/gi, "A particularly $1"],
+  [/\bIt is also worth\b/gi, "Also worth"],
+  [/\bThis is particularly (true|evident|clear|notable)\b/gi, "That holds especially"],
+  [/\bThis has led to\b/gi, "The result:"],
+  [/\bThis means that\b/gi, "So"],
+  [/\bThis is because\b/gi, "The reason:"],
+  [/\bThere has been a growing\b/gi, "We've seen more"],
+  [/\bIt is also important\b/gi, "Also key"],
+  [/\bAs a result of this\b/gi, "Because of this"],
+  [/\bIn recent years,?\s/gi, "Lately, "],
+  [/\bAt the same time\b/gi, "Meanwhile"],
+  [/\bOn the other hand\b/gi, "Then again"],
+  [/\bFor this reason\b/gi, "That's why"],
+  [/\bAs such\b/gi, "So"],
+  [/\bGiven that\b/gi, "Since"],
+  [/\bWith that said\b/gi, "Still"],
+  [/\bWith this in mind\b/gi, "Keeping that in mind"],
+  [/\bTo that end\b/gi, "For that"],
+  [/\bBy and large\b/gi, "Mostly"],
+  [/\bAll things considered\b/gi, "Overall"],
+];
+
+function predictableContinuationBreaker(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of PREDICTABLE_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+// Sub-pass C: Paragraph-level vocabulary monotony breaker.
+// If a paragraph has very low type-token ratio (< 0.45), it signals AI
+// repetitiveness. Find the most repeated non-stop content word and replace
+// one occurrence with a pronoun or demonstrative.
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+  "should", "may", "might", "must", "can", "could", "to", "of", "in",
+  "for", "on", "with", "at", "by", "from", "as", "into", "through",
+  "during", "before", "after", "and", "but", "or", "nor", "not", "so",
+  "yet", "both", "either", "neither", "each", "every", "all", "any",
+  "few", "more", "most", "other", "some", "such", "no", "only", "own",
+  "same", "than", "too", "very", "just", "about", "also", "then",
+  "that", "this", "these", "those", "it", "its", "they", "them", "their",
+  "he", "she", "his", "her", "we", "our", "you", "your", "i", "my",
+  "me", "which", "who", "whom", "what", "where", "when", "how", "if",
+]);
+
+function paragraphVocabularyBreaker(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const words = para.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(w => w.length > 2);
+    if (words.length < 20) return para; // too short to measure
+
+    const unique = new Set(words).size;
+    const ttr = unique / words.length;
+
+    if (ttr >= 0.45) return para; // diversity is acceptable
+
+    // Find most repeated content word
+    const freq: Record<string, number> = {};
+    for (const w of words) {
+      if (STOP_WORDS.has(w)) continue;
+      freq[w] = (freq[w] || 0) + 1;
+    }
+
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    if (sorted.length === 0 || sorted[0][1] < 3) return para; // no word repeats 3+ times
+
+    const overusedWord = sorted[0][0];
+    // Replace the second occurrence with "this" or "it" where grammatically safe
+    const wordRegex = new RegExp(`\\b${overusedWord}\\b`, "gi");
+    let occurrenceCount = 0;
+    const fixed = para.replace(wordRegex, (match) => {
+      occurrenceCount++;
+      // Replace the 2nd occurrence only
+      if (occurrenceCount === 2) return "this";
+      return match;
+    });
+
+    return fixed;
+  });
+
+  return result.join("\n\n");
+}
+
+// Master multi-detector hardening pass.
+function multiDetectorHardening(text: string): string {
+  let result = text;
+  result = ngramFrequencySuppression(result);
+  result = predictableContinuationBreaker(result);
+  result = paragraphVocabularyBreaker(result);
+  return result;
+}
+
 // ─── Low-Mutation Islands ────────────────────────────────────────────────────
 // After all LLM passes, find 1-2 sentences from the original input that
 // closely match sentences in the output (high word overlap) and restore
@@ -1257,8 +1413,11 @@ export async function humanize(
   // Pass 8b: Deterministic micro-surgery (no LLM call) — break model-family fingerprint
   const surgeryResult = deterministicMicroSurgery(detectorHardened);
 
+  // Pass 8c: Multi-detector hardening (no LLM call) — target GPTZero/ZeroGPT/QuillBot/Originality signals
+  const multiHardened = multiDetectorHardening(surgeryResult);
+
   // Pass 9: Low-mutation islands (no LLM call) — restore 1-2 original sentences
-  const islanded = lowMutationIslands(surgeryResult, truncated);
+  const islanded = lowMutationIslands(multiHardened, truncated);
 
   // Pass 10: Length discipline — enforce 90%–110% of input word count
   return enforceLengthDiscipline(islanded, inputWordCount);

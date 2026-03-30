@@ -272,6 +272,40 @@ function clauseLengthDistributionScore(text: string): number {
   return 85;
 }
 
+// 10. Paragraph-level TTR uniformity — AI produces paragraphs with very similar
+//     type-token ratios. Humans vary vocabulary density paragraph-by-paragraph.
+//     Measures the std dev of per-paragraph TTR. Low variance = AI.
+function paragraphTTRVarianceScore(text: string): number {
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 30);
+
+  if (paragraphs.length < 3) return 50; // not enough paragraphs to score
+
+  const ttrs = paragraphs.map((para) => {
+    const words = para
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+    if (words.length === 0) return 0;
+    return new Set(words).size / words.length;
+  });
+
+  const avg = ttrs.reduce((a, b) => a + b, 0) / ttrs.length;
+  const variance =
+    ttrs.reduce((sum, t) => sum + Math.pow(t - avg, 2), 0) / ttrs.length;
+  const stdDev = Math.sqrt(variance);
+
+  // High variance = human (different paragraphs have different density)
+  if (stdDev > 0.12) return 10;
+  if (stdDev > 0.08) return 25;
+  if (stdDev > 0.05) return 45;
+  if (stdDev > 0.03) return 65;
+  return 80;
+}
+
 // ─── Label + Export ──────────────────────────────────────────────────────────
 
 function getLabel(score: number): DetectionResult["label"] {
@@ -296,23 +330,25 @@ export function detectAI(text: string): DetectionResult {
   const filler   = fillerPhraseScore(text);             // 0.18
   const starters = sentenceStarterScore(sentences);     // 0.10
 
-  // ── New 4 metrics ───────────────────────────────────────────────
+  // ── New 5 metrics ───────────────────────────────────────────────
   const punctEnt    = punctuationEntropyScore(text);         // 0.03
-  const repOpeners  = repeatedOpenersScore(sentences);       // 0.07
-  const transDens   = transitionDensityScore(text);          // 0.12
-  const clauseDist  = clauseLengthDistributionScore(text);   // 0.05
+  const repOpeners  = repeatedOpenersScore(sentences);       // 0.06
+  const transDens   = transitionDensityScore(text);          // 0.11
+  const clauseDist  = clauseLengthDistributionScore(text);   // 0.04
+  const paraTTR     = paragraphTTRVarianceScore(text);       // 0.05
 
   // Weights sum to 1.00
   const raw =
     avgLen   * 0.12 +
-    burst    * 0.25 +
+    burst    * 0.24 +
     vocabDiv * 0.08 +
-    filler   * 0.18 +
+    filler   * 0.17 +
     starters * 0.10 +
     punctEnt    * 0.03 +
-    repOpeners  * 0.07 +
-    transDens   * 0.12 +
-    clauseDist  * 0.05;
+    repOpeners  * 0.06 +
+    transDens   * 0.11 +
+    clauseDist  * 0.04 +
+    paraTTR     * 0.05;
 
   const score = Math.round(Math.min(100, Math.max(0, raw)));
   return { score, label: getLabel(score) };
