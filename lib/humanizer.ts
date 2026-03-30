@@ -837,6 +837,67 @@ function humanTraitEngine(text: string): string {
   return result;
 }
 
+// ─── Low-Mutation Islands ────────────────────────────────────────────────────
+// After all LLM passes, find 1-2 sentences from the original input that
+// closely match sentences in the output (high word overlap) and restore
+// them closer to their original form. Creates "islands" of minimal mutation
+// within the rewritten text, breaking the full-rewrite fingerprint.
+
+function computeWordOverlap(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().replace(/[^a-z\s]/g, "").split(/\s+/));
+  const wordsB = new Set(b.toLowerCase().replace(/[^a-z\s]/g, "").split(/\s+/));
+  let overlap = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) overlap++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union === 0 ? 0 : overlap / union; // Jaccard similarity
+}
+
+function lowMutationIslands(output: string, originalInput: string): string {
+  const outputSentences = output
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => s.trim().length > 10);
+  const inputSentences = originalInput
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => s.trim().length > 10);
+
+  if (outputSentences.length < 5 || inputSentences.length < 3) return output;
+
+  // Find output sentences that have highest overlap with an original sentence
+  const candidates: { outIdx: number; inIdx: number; overlap: number }[] = [];
+
+  for (let oi = 0; oi < outputSentences.length; oi++) {
+    for (let ii = 0; ii < inputSentences.length; ii++) {
+      const overlap = computeWordOverlap(outputSentences[oi], inputSentences[ii]);
+      if (overlap > 0.5) {
+        candidates.push({ outIdx: oi, inIdx: ii, overlap });
+      }
+    }
+  }
+
+  // Sort by overlap descending, pick up to 2 non-adjacent islands
+  candidates.sort((a, b) => b.overlap - a.overlap);
+
+  const restored = new Set<number>();
+  for (const c of candidates) {
+    if (restored.size >= 2) break;
+    // Don't restore first or last sentence (those are handled by other passes)
+    if (c.outIdx === 0 || c.outIdx === outputSentences.length - 1) continue;
+    // Don't restore adjacent to already restored
+    const hasAdjacentRestore = [...restored].some(
+      (r) => Math.abs(r - c.outIdx) <= 1
+    );
+    if (hasAdjacentRestore) continue;
+
+    // Restore the original input sentence into this position
+    outputSentences[c.outIdx] = inputSentences[c.inIdx];
+    restored.add(c.outIdx);
+  }
+
+  return outputSentences.join(" ");
+}
+
 // ─── Length Discipline ───────────────────────────────────────────────────────
 // If the output exceeds 110% of input word count, trim at the last complete
 // sentence boundary that fits within the budget. Never cuts mid-sentence.
@@ -911,6 +972,9 @@ export async function humanize(
   // Pass 7: Human writing trait engine (no LLM call)
   const humanized = humanTraitEngine(suppressed);
 
-  // Pass 8: Length discipline — enforce 90%–110% of input word count
-  return enforceLengthDiscipline(humanized, inputWordCount);
+  // Pass 8: Low-mutation islands (no LLM call) — restore 1-2 original sentences
+  const islanded = lowMutationIslands(humanized, truncated);
+
+  // Pass 9: Length discipline — enforce 90%–110% of input word count
+  return enforceLengthDiscipline(islanded, inputWordCount);
 }
