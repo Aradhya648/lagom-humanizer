@@ -397,6 +397,80 @@ function sentenceAsymmetryPass(text: string): string {
   return processed.join("\n\n");
 }
 
+// ─── Rhetorical Fluency Suppression ──────────────────────────────────────────
+// Deterministic pass — no LLM call.
+// Replaces polished-but-generic rhetorical phrases with grounded alternatives.
+// Also flattens one sentence per paragraph if all sentences contain flourish.
+
+const RHETORICAL_REPLACEMENTS: [RegExp, string][] = [
+  [/\btruly incredible\b/gi, "notable"],
+  [/\bdeeply layered\b/gi, "layered"],
+  [/\butterly rooted\b/gi, "rooted"],
+  [/\bexact same moment\b/gi, "same moment"],
+  [/\bbreathtaking\b/gi, "striking"],
+  [/\bprofound(?:ly)?\b/gi, "real"],
+  [/\bremarkable\b/gi, "worth noting"],
+  [/\btruly transformative\b/gi, "significant"],
+  [/\bdeeply rooted\b/gi, "rooted"],
+  [/\bprofoundly important\b/gi, "important"],
+  [/\bimmensely powerful\b/gi, "powerful"],
+  [/\bfundamentally reshape\b/gi, "reshape"],
+  [/\bparadigm shift\b/gi, "change"],
+  [/\bgroundbreaking\b/gi, "new"],
+  [/\bpivotal\b/gi, "key"],
+  [/\btransformative\b/gi, "significant"],
+  [/\bextraordinary\b/gi, "unusual"],
+  [/\bseamlessly\b/gi, "smoothly"],
+  [/\bintricate\b/gi, "detailed"],
+  [/\bmeticulously\b/gi, "carefully"],
+  [/\bundeniably\b/gi, "clearly"],
+  [/\bindispensable\b/gi, "necessary"],
+  [/\bunparalleled\b/gi, "unusual"],
+  [/\boverarchingly\b/gi, "broadly"],
+  [/\binextricably\b/gi, "closely"],
+];
+
+// Words that mark a sentence as rhetorically "flourished"
+const FLOURISH_MARKERS = /\b(profound|remarkable|extraordinary|transformative|breathtaking|pivotal|unprecedented|paradigm|groundbreaking|indispensable|unparalleled|meticulously|seamlessly|intricate|undeniably)\b/i;
+
+function rhetoricalSuppressionPass(text: string): string {
+  // Phase A: Direct phrase replacement
+  let result = text;
+  for (const [pattern, replacement] of RHETORICAL_REPLACEMENTS) {
+    result = result.replace(pattern, replacement);
+  }
+
+  // Phase B: Ensure at least one plain sentence per paragraph
+  const paragraphs = result.split(/\n\s*\n/);
+  const processed = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para;
+
+    // Check if every sentence still has a flourish marker
+    const allFlourished = sentences.every((s) => FLOURISH_MARKERS.test(s));
+    if (!allFlourished) return para;
+
+    // Flatten the shortest sentence to be maximally plain
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const minIdx = lengths.indexOf(Math.min(...lengths));
+    // Remove any remaining flourish words from that sentence
+    sentences[minIdx] = sentences[minIdx].replace(FLOURISH_MARKERS, (match) => {
+      const plainMap: Record<string, string> = {
+        profound: "real", remarkable: "clear", extraordinary: "unusual",
+        transformative: "big", breathtaking: "striking", pivotal: "key",
+        unprecedented: "new", paradigm: "model", groundbreaking: "new",
+        indispensable: "needed", unparalleled: "rare", meticulously: "carefully",
+        seamlessly: "smoothly", intricate: "detailed", undeniably: "clearly",
+      };
+      return plainMap[match.toLowerCase()] ?? match;
+    });
+
+    return sentences.join(" ");
+  });
+
+  return processed.join("\n\n");
+}
+
 // ─── Length Discipline ───────────────────────────────────────────────────────
 // If the output exceeds 110% of input word count, trim at the last complete
 // sentence boundary that fits within the budget. Never cuts mid-sentence.
@@ -459,6 +533,9 @@ export async function humanize(
   // Pass 5: Sentence asymmetry injection (no LLM call)
   const asymmetric = sentenceAsymmetryPass(cleaned);
 
-  // Pass 6: Length discipline — enforce 90%–110% of input word count
-  return enforceLengthDiscipline(asymmetric, inputWordCount);
+  // Pass 6: Rhetorical fluency suppression (no LLM call)
+  const suppressed = rhetoricalSuppressionPass(asymmetric);
+
+  // Pass 7: Length discipline — enforce 90%–110% of input word count
+  return enforceLengthDiscipline(suppressed, inputWordCount);
 }
