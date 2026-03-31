@@ -2053,6 +2053,86 @@ function firstParagraphStylometricHardening(text: string): string {
   return paragraphs.join("\n\n");
 }
 
+// ─── Rhetorical Density Limiter ─────────────────────────────────────────────
+// Phase 26: Counts conversational/rhetorical markers per paragraph and strips
+// excess when density exceeds a threshold. LLM passes tend to over-inject
+// casual markers to sound "human," creating a detectable over-distribution.
+//
+// Markers: "think about it", "look", "honestly", "ah", "you know", "for me",
+// "I mean", "right?", "sure", "seriously", "let's be real", "the thing is"
+
+const RHETORICAL_DENSITY_MARKERS: RegExp[] = [
+  /\bthink about it\b/i,
+  /\blook,?\s/i,
+  /\bhonestly,?\s/i,
+  /\bah,?\s/i,
+  /\byou know,?\s/i,
+  /\bfor me,?\s/i,
+  /\bI mean,?\s/i,
+  /\bright\?/i,
+  /\bsure,?\s/i,
+  /\bseriously,?\s/i,
+  /\blet['']s be (real|honest)\b/i,
+  /\bthe thing is,?\s/i,
+  /\bto be fair,?\s/i,
+  /\bif I['']m being honest\b/i,
+  /\bisn['']t it\??/i,
+  /\bdon['']t you think\??/i,
+  /\bhere['']s the (thing|deal|kicker)\b/i,
+  /\byou see,?\s/i,
+  /\bbelieve it or not\b/i,
+  /\btrust me\b/i,
+];
+
+function rhetoricalDensityLimiter(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    // Count total markers in this paragraph
+    let totalMarkers = 0;
+    const markerLocations: { sentIdx: number; markerIdx: number }[] = [];
+
+    for (let si = 0; si < sentences.length; si++) {
+      for (let mi = 0; mi < RHETORICAL_DENSITY_MARKERS.length; mi++) {
+        if (RHETORICAL_DENSITY_MARKERS[mi].test(sentences[si])) {
+          totalMarkers++;
+          markerLocations.push({ sentIdx: si, markerIdx: mi });
+        }
+      }
+    }
+
+    // Threshold: max 1 marker per 2 sentences (density ≤ 0.5)
+    const maxMarkers = Math.max(1, Math.floor(sentences.length * 0.5));
+    if (totalMarkers <= maxMarkers) return para;
+
+    // Strip excess markers from mid-paragraph sentences (keep first and last)
+    let removed = 0;
+    const targetRemove = totalMarkers - maxMarkers;
+
+    for (const loc of markerLocations) {
+      if (removed >= targetRemove) break;
+      // Don't strip from first or last sentence
+      if (loc.sentIdx === 0 || loc.sentIdx === sentences.length - 1) continue;
+
+      const marker = RHETORICAL_DENSITY_MARKERS[loc.markerIdx];
+      const original = sentences[loc.sentIdx];
+      const stripped = original.replace(marker, "").replace(/^\s+/, "").replace(/\s{2,}/g, " ");
+
+      if (stripped.length > 10) {
+        sentences[loc.sentIdx] = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+        removed++;
+      }
+    }
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
 // ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
 // Phase 25: If internal detector score is already below threshold after the
 // core deterministic passes, reduce or skip the strongest later passes to
@@ -2118,14 +2198,17 @@ export async function humanize(
   // Pass 8: Detector-weight implementation (no LLM call)
   const detectorHardened = detectorWeightPass(humanized);
 
+  // Pass 8a: Rhetorical density limiter (no LLM call) — cap conversational markers
+  const rhetoricLimited = rhetoricalDensityLimiter(detectorHardened);
+
   // ── Adaptive aggression checkpoint ──
   // Score the text after core passes to determine if later heavy passes are needed.
-  const aggression = determineAggressionLevel(detectorHardened);
+  const aggression = determineAggressionLevel(rhetoricLimited);
 
   // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
   const surgeryResult = aggression === "minimal"
-    ? detectorHardened
-    : deterministicMicroSurgery(detectorHardened);
+    ? rhetoricLimited
+    : deterministicMicroSurgery(rhetoricLimited);
 
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
