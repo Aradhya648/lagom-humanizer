@@ -2053,6 +2053,25 @@ function firstParagraphStylometricHardening(text: string): string {
   return paragraphs.join("\n\n");
 }
 
+// ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
+// Phase 25: If internal detector score is already below threshold after the
+// core deterministic passes, reduce or skip the strongest later passes to
+// avoid over-humanizing already-safe text. Over-humanization introduces its
+// own detectable patterns (too many contractions, too casual, too fragmented).
+//
+// Strategy: score the text at a mid-pipeline checkpoint. If score < 30,
+// skip the heaviest surgery passes (micro-surgery, signature breaker, noise
+// engine). If score < 20, also skip stylometric correction.
+
+type AggressionLevel = "full" | "reduced" | "minimal";
+
+function determineAggressionLevel(text: string): AggressionLevel {
+  const { score } = detectAI(text);
+  if (score < 20) return "minimal";
+  if (score < 30) return "reduced";
+  return "full";
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -2099,27 +2118,41 @@ export async function humanize(
   // Pass 8: Detector-weight implementation (no LLM call)
   const detectorHardened = detectorWeightPass(humanized);
 
-  // Pass 8b: Deterministic micro-surgery (no LLM call) — break model-family fingerprint
-  const surgeryResult = deterministicMicroSurgery(detectorHardened);
+  // ── Adaptive aggression checkpoint ──
+  // Score the text after core passes to determine if later heavy passes are needed.
+  const aggression = determineAggressionLevel(detectorHardened);
 
-  // Pass 8c: Multi-detector hardening (no LLM call) — target GPTZero/ZeroGPT/QuillBot/Originality signals
-  const multiHardened = multiDetectorHardening(surgeryResult);
+  // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
+  const surgeryResult = aggression === "minimal"
+    ? detectorHardened
+    : deterministicMicroSurgery(detectorHardened);
 
-  // Pass 9: Low-mutation islands (no LLM call) — restore 1-2 original sentences
+  // Pass 8c: Multi-detector hardening (no LLM call)
+  const multiHardened = aggression === "minimal"
+    ? surgeryResult
+    : multiDetectorHardening(surgeryResult);
+
+  // Pass 9: Low-mutation islands (no LLM call) — always runs (preserves natural feel)
   const islanded = lowMutationIslands(multiHardened, truncated);
 
-  // Pass 10: Length discipline — enforce 90%–110% of input word count
+  // Pass 10: Length discipline — always runs
   const lengthEnforced = enforceLengthDiscipline(islanded, inputWordCount);
 
-  // Pass 11: Stylometric correction layer (no LLM call) — selective rule-shaped surgery
-  const styloCorrected = stylometricCorrectionLayer(lengthEnforced);
+  // Pass 11: Stylometric correction layer (no LLM call) — skip if minimal aggression
+  const styloCorrected = aggression === "minimal"
+    ? lengthEnforced
+    : stylometricCorrectionLayer(lengthEnforced);
 
-  // Pass 12: Sentence signature breaker (no LLM call) — break local rhythm fingerprint
-  const signatureBroken = sentenceSignatureBreaker(styloCorrected);
+  // Pass 12: Sentence signature breaker (no LLM call) — skip if reduced or minimal
+  const signatureBroken = aggression === "full"
+    ? sentenceSignatureBreaker(styloCorrected)
+    : styloCorrected;
 
-  // Pass 13: Micro human noise engine (no LLM call) — controlled irregularities
-  const noised = microHumanNoiseEngine(signatureBroken);
+  // Pass 13: Micro human noise engine (no LLM call) — skip if reduced or minimal
+  const noised = aggression === "full"
+    ? microHumanNoiseEngine(signatureBroken)
+    : signatureBroken;
 
-  // Pass 14: First paragraph stylometric hardening (no LLM call) — extra opening corrections
+  // Pass 14: First paragraph stylometric hardening (no LLM call) — always runs (lightweight)
   return firstParagraphStylometricHardening(noised);
 }
