@@ -2133,6 +2133,95 @@ function rhetoricalDensityLimiter(text: string): string {
   return result.join("\n\n");
 }
 
+// ─── Lexical Spike Suppression ──────────────────────────────────────────────
+// Phase 27: Detects clusters of upgraded/elevated vocabulary words appearing
+// within a short span (100-word window). When 3+ elevated words cluster
+// together, flattens the excess to prevent lexical confidence spikes that
+// detectors interpret as model-generated "upgrade" behavior.
+
+const ELEVATED_VOCAB: { re: RegExp; plain: string }[] = [
+  { re: /\bcolossal\b/i,      plain: "huge" },
+  { re: /\bmonumental\b/i,    plain: "big" },
+  { re: /\bprofound\b/i,      plain: "deep" },
+  { re: /\babsolutely\b/i,    plain: "fully" },
+  { re: /\bincredibly\b/i,    plain: "very" },
+  { re: /\bstartling\b/i,     plain: "surprising" },
+  { re: /\bextraordinary\b/i, plain: "unusual" },
+  { re: /\bimmensely\b/i,     plain: "very" },
+  { re: /\bremarkably\b/i,    plain: "quite" },
+  { re: /\bstunning\b/i,      plain: "striking" },
+  { re: /\bspectacular\b/i,   plain: "impressive" },
+  { re: /\bphenomenal\b/i,    plain: "strong" },
+  { re: /\bmagnificent\b/i,   plain: "great" },
+  { re: /\bexquisite\b/i,     plain: "fine" },
+  { re: /\bformidable\b/i,    plain: "tough" },
+  { re: /\bastounding\b/i,    plain: "surprising" },
+  { re: /\bbreathtaking\b/i,  plain: "striking" },
+  { re: /\bawe-inspiring\b/i, plain: "impressive" },
+  { re: /\bimpeccable\b/i,    plain: "clean" },
+  { re: /\bexceptional\b/i,   plain: "strong" },
+  { re: /\bunparalleled\b/i,  plain: "rare" },
+  { re: /\binvaluable\b/i,    plain: "useful" },
+  { re: /\bindispensable\b/i, plain: "needed" },
+  { re: /\bparamount\b/i,     plain: "top" },
+  { re: /\bpivotal\b/i,       plain: "key" },
+];
+
+function lexicalSpikeSuppression(text: string): string {
+  // Find all elevated word positions
+  const hits: { index: number; length: number; vocabIdx: number }[] = [];
+
+  for (let vi = 0; vi < ELEVATED_VOCAB.length; vi++) {
+    const globalRe = new RegExp(ELEVATED_VOCAB[vi].re.source, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = globalRe.exec(text)) !== null) {
+      hits.push({ index: m.index, length: m[0].length, vocabIdx: vi });
+    }
+  }
+
+  if (hits.length < 3) return text; // no spike possible
+  hits.sort((a, b) => a.index - b.index);
+
+  // Sliding window: find clusters of 3+ within ~100 word span (~600 chars)
+  const WINDOW = 600;
+  const toFlatten = new Set<number>(); // indices into hits[]
+
+  for (let i = 0; i < hits.length; i++) {
+    // Count how many hits fall within window starting at hits[i]
+    const windowEnd = hits[i].index + WINDOW;
+    const cluster: number[] = [];
+    for (let j = i; j < hits.length && hits[j].index < windowEnd; j++) {
+      cluster.push(j);
+    }
+
+    if (cluster.length >= 3) {
+      // Flatten all but the first in the cluster
+      for (let k = 1; k < cluster.length; k++) {
+        toFlatten.add(cluster[k]);
+      }
+    }
+  }
+
+  if (toFlatten.size === 0) return text;
+
+  // Apply replacements from end to start
+  const sorted = [...toFlatten].sort((a, b) => hits[b].index - hits[a].index);
+  let result = text;
+
+  for (const hi of sorted) {
+    const { index, length, vocabIdx } = hits[hi];
+    const original = result.slice(index, index + length);
+    let plain = ELEVATED_VOCAB[vocabIdx].plain;
+    // Preserve capitalisation
+    if (original[0] === original[0].toUpperCase()) {
+      plain = plain.charAt(0).toUpperCase() + plain.slice(1);
+    }
+    result = result.slice(0, index) + plain + result.slice(index + length);
+  }
+
+  return result;
+}
+
 // ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
 // Phase 25: If internal detector score is already below threshold after the
 // core deterministic passes, reduce or skip the strongest later passes to
@@ -2201,14 +2290,17 @@ export async function humanize(
   // Pass 8a: Rhetorical density limiter (no LLM call) — cap conversational markers
   const rhetoricLimited = rhetoricalDensityLimiter(detectorHardened);
 
+  // Pass 8a2: Lexical spike suppression (no LLM call) — flatten vocabulary clusters
+  const spikeFlattened = lexicalSpikeSuppression(rhetoricLimited);
+
   // ── Adaptive aggression checkpoint ──
   // Score the text after core passes to determine if later heavy passes are needed.
-  const aggression = determineAggressionLevel(rhetoricLimited);
+  const aggression = determineAggressionLevel(spikeFlattened);
 
   // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
   const surgeryResult = aggression === "minimal"
-    ? rhetoricLimited
-    : deterministicMicroSurgery(rhetoricLimited);
+    ? spikeFlattened
+    : deterministicMicroSurgery(spikeFlattened);
 
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
