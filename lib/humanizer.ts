@@ -2222,6 +2222,87 @@ function lexicalSpikeSuppression(text: string): string {
   return result;
 }
 
+// ─── Semantic Variance Injector ─────────────────────────────────────────────
+// Phase 28: Measures semantic similarity between consecutive paragraphs using
+// a lightweight proxy: shared content-word ratio. If two adjacent paragraphs
+// share too many content words (Jaccard > 0.25), inject local variance by:
+//   A) Compress one explanation (shorten longest sentence)
+//   B) Flatten one transition (strip connector from sentence 1 of second para)
+//   C) Delay one detail (move last sentence to second-to-last position)
+// Only one action per paragraph pair. Max 2 interventions per text.
+
+function paragraphContentWords(para: string): Set<string> {
+  return new Set(
+    para
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 4 && !STOP_WORDS.has(w))
+  );
+}
+
+function paragraphJaccard(a: Set<string>, b: Set<string>): number {
+  let overlap = 0;
+  for (const w of a) {
+    if (b.has(w)) overlap++;
+  }
+  const union = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : overlap / union;
+}
+
+function semanticVarianceInjector(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length < 3) return text;
+
+  const contentWords = paragraphs.map(paragraphContentWords);
+  let interventions = 0;
+
+  for (let i = 1; i < paragraphs.length && interventions < 2; i++) {
+    const similarity = paragraphJaccard(contentWords[i - 1], contentWords[i]);
+    if (similarity < 0.25) continue; // sufficiently different
+
+    const sentences = getSentences(paragraphs[i]);
+    if (sentences.length < 3) continue;
+
+    // Strategy A: Compress the longest sentence
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const maxIdx = lengths.indexOf(Math.max(...lengths));
+
+    if (lengths[maxIdx] > 16) {
+      const sentence = sentences[maxIdx];
+      const commaPos = sentence.indexOf(",", 15);
+      if (commaPos > 0 && commaPos < sentence.length - 15) {
+        sentences[maxIdx] = sentence.slice(0, commaPos).trimEnd() + ".";
+        paragraphs[i] = sentences.join(" ");
+        interventions++;
+        continue;
+      }
+    }
+
+    // Strategy B: Strip connector from first sentence of second paragraph
+    const connRe = /^(However|Moreover|Furthermore|Additionally|Nevertheless|Indeed|Similarly|Likewise|In addition|On top of that|Beyond this),?\s+/i;
+    if (connRe.test(sentences[0])) {
+      const stripped = sentences[0].replace(connRe, "");
+      if (stripped.length > 10) {
+        sentences[0] = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+        paragraphs[i] = sentences.join(" ");
+        interventions++;
+        continue;
+      }
+    }
+
+    // Strategy C: Reorder — move last sentence to second-to-last position
+    if (sentences.length >= 4) {
+      const last = sentences.pop()!;
+      sentences.splice(sentences.length - 1, 0, last);
+      paragraphs[i] = sentences.join(" ");
+      interventions++;
+    }
+  }
+
+  return paragraphs.join("\n\n");
+}
+
 // ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
 // Phase 25: If internal detector score is already below threshold after the
 // core deterministic passes, reduce or skip the strongest later passes to
@@ -2293,14 +2374,17 @@ export async function humanize(
   // Pass 8a2: Lexical spike suppression (no LLM call) — flatten vocabulary clusters
   const spikeFlattened = lexicalSpikeSuppression(rhetoricLimited);
 
+  // Pass 8a3: Semantic variance injector (no LLM call) — reduce inter-paragraph similarity
+  const semanticVaried = semanticVarianceInjector(spikeFlattened);
+
   // ── Adaptive aggression checkpoint ──
   // Score the text after core passes to determine if later heavy passes are needed.
-  const aggression = determineAggressionLevel(spikeFlattened);
+  const aggression = determineAggressionLevel(semanticVaried);
 
   // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
   const surgeryResult = aggression === "minimal"
-    ? spikeFlattened
-    : deterministicMicroSurgery(spikeFlattened);
+    ? semanticVaried
+    : deterministicMicroSurgery(semanticVaried);
 
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
