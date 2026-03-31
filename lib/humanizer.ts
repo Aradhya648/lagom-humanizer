@@ -2599,6 +2599,79 @@ function detectorFingerprintCorrection(text: string): string {
   return paragraphs.join("\n\n");
 }
 
+// ─── Light Factual Grounding Layer ──────────────────────────────────────────
+// Phase 31: Reduces generic abstraction density by replacing vague
+// generalizations with lightweight grounding phrases. Does NOT fabricate
+// facts or add fake references — only makes existing claims sound more
+// grounded and less generalized.
+//
+// Pattern: detect vague universal claims and inject grounding qualifiers.
+
+const VAGUE_TO_GROUNDED: [RegExp, string][] = [
+  // "X is important" → "in practice, X is important"
+  [/\bThis is (important|significant|crucial|essential|vital)\b/gi, "In practice, this is $1"],
+  // "many people" → "in many cases, people"
+  [/\bMany people\b/g, "In many cases, people"],
+  [/\bmany people\b/g, "in many cases, people"],
+  // "It is clear that" → "From what we see, it's clear that"
+  [/\bIt is clear that\b/gi, "From what we can tell,"],
+  // "always" → "in most cases"
+  [/\balways leads to\b/gi, "often leads to"],
+  [/\balways results in\b/gi, "typically results in"],
+  // "never" → "rarely" (when used as generalization)
+  [/\bnever works\b/gi, "rarely works"],
+  [/\bnever succeeds\b/gi, "rarely succeeds"],
+  // Generic "the world" phrases
+  [/\bacross the world\b/gi, "in many regions"],
+  [/\baround the world\b/gi, "across different contexts"],
+  [/\bglobally\b/gi, "in many places"],
+  // "everyone knows" type claims
+  [/\beveryone (knows|agrees|understands)\b/gi, "most observers $1"],
+  [/\bno one (denies|disputes|questions)\b/gi, "few would dispute"],
+  // Vague temporal claims
+  [/\bsince the beginning of time\b/gi, "for a long time"],
+  [/\bthroughout history\b/gi, "historically"],
+  [/\bsince time immemorial\b/gi, "for generations"],
+  // Over-confident causal claims
+  [/\bThis (clearly|obviously|undeniably) (shows|proves|demonstrates)\b/gi, "This suggests"],
+  [/\bIt (clearly|obviously) (shows|proves|demonstrates)\b/gi, "It suggests"],
+  // Generic superlatives
+  [/\bthe most important\b/gi, "one of the more important"],
+  [/\bthe biggest\b/gi, "one of the bigger"],
+  [/\bthe greatest\b/gi, "one of the greater"],
+];
+
+function lightFactualGrounding(text: string): string {
+  let result = text;
+  let replacements = 0;
+  const maxReplacements = 4; // don't over-ground — keep it light
+
+  for (const [pattern, replacement] of VAGUE_TO_GROUNDED) {
+    if (replacements >= maxReplacements) break;
+
+    const before = result;
+    result = result.replace(pattern, (match, ...args) => {
+      if (replacements >= maxReplacements) return match;
+      replacements++;
+      // Handle capture groups in replacement string
+      let rep = replacement;
+      for (let i = 0; i < args.length - 2; i++) {
+        if (typeof args[i] === "string") {
+          rep = rep.replace(`$${i + 1}`, args[i]);
+        }
+      }
+      return rep;
+    });
+
+    if (result !== before) {
+      // Count how many replacements this pattern made
+      // (already tracked in the replacer above)
+    }
+  }
+
+  return result;
+}
+
 // ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
 // Phase 25: If internal detector score is already below threshold after the
 // core deterministic passes, reduce or skip the strongest later passes to
@@ -2679,14 +2752,17 @@ export async function humanize(
   // Pass 8a5: Detector fingerprint analyzer (no LLM call) — targeted worst-axis correction
   const fingerprintCorrected = detectorFingerprintCorrection(registerMixed);
 
+  // Pass 8a6: Light factual grounding (no LLM call) — reduce generic abstractions
+  const grounded = lightFactualGrounding(fingerprintCorrected);
+
   // ── Adaptive aggression checkpoint ──
   // Score the text after core passes to determine if later heavy passes are needed.
-  const aggression = determineAggressionLevel(fingerprintCorrected);
+  const aggression = determineAggressionLevel(grounded);
 
   // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
   const surgeryResult = aggression === "minimal"
-    ? fingerprintCorrected
-    : deterministicMicroSurgery(fingerprintCorrected);
+    ? grounded
+    : deterministicMicroSurgery(grounded);
 
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
