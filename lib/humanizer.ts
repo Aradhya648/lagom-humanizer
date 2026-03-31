@@ -2303,6 +2303,130 @@ function semanticVarianceInjector(text: string): string {
   return paragraphs.join("\n\n");
 }
 
+// ─── Register Profiler ──────────────────────────────────────────────────────
+// Phase 29: Measures sentence register (plain/moderate/elevated) across the
+// output and enforces mixed register. If all sentences in a paragraph sit at
+// the same register level, mutate one to break tonal uniformity.
+//
+// Register classification:
+//   plain    — short (<14 words), no fancy vocab, no formal connectors
+//   moderate — medium length, some structure, everyday vocabulary
+//   elevated — long, formal connectors, elevated vocabulary, complex clauses
+
+type RegisterLevel = "plain" | "moderate" | "elevated";
+
+const ELEVATED_WORDS_RE = /\b(consequently|nevertheless|furthermore|notwithstanding|subsequently|comprehensive|sophisticated|fundamental|significant|remarkable|extraordinary|unprecedented|indispensable|paradigm|transformative)\b/i;
+const FORMAL_STRUCTURE_RE = /;|—|:|,\s+which\b|,\s+where\b|,\s+although\b/;
+
+function classifyRegister(sentence: string): RegisterLevel {
+  const words = sentence.split(/\s+/).length;
+
+  // Short plain sentences
+  if (words <= 10 && !ELEVATED_WORDS_RE.test(sentence)) return "plain";
+
+  // Check for elevated markers
+  const hasElevatedVocab = ELEVATED_WORDS_RE.test(sentence);
+  const hasFormalStructure = FORMAL_STRUCTURE_RE.test(sentence);
+  const hasFormalConnector = /^(However|Moreover|Furthermore|Nevertheless|Consequently|Additionally)\b/i.test(sentence);
+
+  if ((hasElevatedVocab && hasFormalStructure) || (hasFormalConnector && words > 20)) return "elevated";
+  if (hasElevatedVocab || hasFormalStructure || words > 25) return "moderate";
+  if (words <= 14) return "plain";
+
+  return "moderate";
+}
+
+// Flatten an elevated sentence down to moderate
+function flattenToModerate(sentence: string): string {
+  let result = sentence;
+
+  // Strip one formal connector
+  result = result.replace(/^(However|Moreover|Furthermore|Nevertheless|Consequently|Additionally),?\s+/i, "");
+  if (result.length > 5) {
+    result = result.charAt(0).toUpperCase() + result.slice(1);
+  }
+
+  // Replace one elevated word
+  const elevatedMatch = result.match(ELEVATED_WORDS_RE);
+  if (elevatedMatch) {
+    const plainMap: Record<string, string> = {
+      consequently: "so", nevertheless: "still", furthermore: "also",
+      notwithstanding: "despite", subsequently: "then", comprehensive: "full",
+      sophisticated: "complex", fundamental: "basic", significant: "real",
+      remarkable: "clear", extraordinary: "unusual", unprecedented: "new",
+      indispensable: "needed", paradigm: "model", transformative: "big",
+    };
+    const match = elevatedMatch[0].toLowerCase();
+    const replacement = plainMap[match];
+    if (replacement) {
+      const preserve = elevatedMatch[0][0] === elevatedMatch[0][0].toUpperCase();
+      const rep = preserve ? replacement.charAt(0).toUpperCase() + replacement.slice(1) : replacement;
+      result = result.replace(ELEVATED_WORDS_RE, rep);
+    }
+  }
+
+  return result;
+}
+
+// Elevate a plain sentence to moderate (add minor structure)
+function elevateToModerate(sentence: string): string {
+  // Only if very short — add a brief qualifying clause
+  const words = sentence.split(/\s+/);
+  if (words.length < 6) return sentence; // too short to modify safely
+
+  // Remove trailing period, add a lightweight clause
+  const QUALIFIERS = [
+    ", at least in most cases.",
+    ", or close to it.",
+    ", broadly speaking.",
+    ", in practical terms.",
+    ", from what we can tell.",
+  ];
+
+  if (sentence.endsWith(".")) {
+    const base = sentence.slice(0, -1);
+    return base + QUALIFIERS[words.length % QUALIFIERS.length];
+  }
+
+  return sentence;
+}
+
+function registerProfiler(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalAdjustments = 0;
+
+  const result = paragraphs.map((para) => {
+    if (totalAdjustments >= 3) return para; // cap total adjustments
+
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para;
+
+    const registers = sentences.map(classifyRegister);
+
+    // Check if all sentences share the same register
+    const allSame = registers.every((r) => r === registers[0]);
+    if (!allSame) return para; // already mixed — good
+
+    // All sentences at same register — mutate one
+    if (registers[0] === "elevated") {
+      // Flatten the middle sentence
+      const midIdx = Math.floor(sentences.length / 2);
+      sentences[midIdx] = flattenToModerate(sentences[midIdx]);
+      totalAdjustments++;
+    } else if (registers[0] === "plain") {
+      // Elevate one sentence slightly
+      const midIdx = Math.floor(sentences.length / 2);
+      sentences[midIdx] = elevateToModerate(sentences[midIdx]);
+      totalAdjustments++;
+    }
+    // If all moderate — already acceptable, skip
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
 // ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
 // Phase 25: If internal detector score is already below threshold after the
 // core deterministic passes, reduce or skip the strongest later passes to
@@ -2377,14 +2501,17 @@ export async function humanize(
   // Pass 8a3: Semantic variance injector (no LLM call) — reduce inter-paragraph similarity
   const semanticVaried = semanticVarianceInjector(spikeFlattened);
 
+  // Pass 8a4: Register profiler (no LLM call) — enforce mixed sentence register
+  const registerMixed = registerProfiler(semanticVaried);
+
   // ── Adaptive aggression checkpoint ──
   // Score the text after core passes to determine if later heavy passes are needed.
-  const aggression = determineAggressionLevel(semanticVaried);
+  const aggression = determineAggressionLevel(registerMixed);
 
   // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
   const surgeryResult = aggression === "minimal"
-    ? semanticVaried
-    : deterministicMicroSurgery(semanticVaried);
+    ? registerMixed
+    : deterministicMicroSurgery(registerMixed);
 
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
