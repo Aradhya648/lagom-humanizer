@@ -2427,6 +2427,178 @@ function registerProfiler(text: string): string {
   return result.join("\n\n");
 }
 
+// ─── Detector Fingerprint Analyzer ──────────────────────────────────────────
+// Phase 30: Internal approximation of detector-sensitive signals. Computes
+// a 5-axis fingerprint and applies targeted micro-corrections for the most
+// problematic axis. Used as internal guidance only — does not overfit to any
+// single external detector.
+//
+// Axes:
+//   1. Opener confidence — first sentence complexity relative to rest
+//   2. Consecutive rhythm similarity — adjacent sentence length match rate
+//   3. Lexical upgrade clustering — elevated words per 100 words
+//   4. Paragraph energy uniformity — std dev of paragraph word counts
+//   5. Rhetorical density — conversational markers per 100 words
+
+interface DetectorFingerprint {
+  openerConfidence: number;    // 0-100 (lower = better)
+  rhythmSimilarity: number;   // 0-100
+  lexicalClustering: number;  // 0-100
+  energyUniformity: number;   // 0-100
+  rhetoricalDensity: number;  // 0-100
+}
+
+function computeDetectorFingerprint(text: string): DetectorFingerprint {
+  const sentences = getSentences(text);
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+  const words = text.split(/\s+/);
+  const wordCount = words.length;
+
+  // 1. Opener confidence: first sentence word count vs average
+  let openerConfidence = 50;
+  if (sentences.length > 2) {
+    const firstLen = sentences[0].split(/\s+/).length;
+    const avgLen = sentences.slice(1).reduce((sum, s) => sum + s.split(/\s+/).length, 0) / (sentences.length - 1);
+    const ratio = firstLen / Math.max(avgLen, 1);
+    if (ratio > 0.85 && ratio < 1.15) openerConfidence = 75; // suspiciously similar
+    else if (ratio > 1.3 || ratio < 0.7) openerConfidence = 20; // good variance
+    else openerConfidence = 50;
+  }
+
+  // 2. Consecutive rhythm similarity: how many adjacent pairs have similar length
+  let rhythmSimilarity = 50;
+  if (sentences.length > 3) {
+    let similarPairs = 0;
+    for (let i = 1; i < sentences.length; i++) {
+      const prevLen = sentences[i - 1].split(/\s+/).length;
+      const currLen = sentences[i].split(/\s+/).length;
+      const ratio = Math.min(prevLen, currLen) / Math.max(prevLen, currLen);
+      if (ratio > 0.75) similarPairs++;
+    }
+    rhythmSimilarity = Math.round((similarPairs / (sentences.length - 1)) * 100);
+  }
+
+  // 3. Lexical upgrade clustering: elevated words per 100 words
+  let lexicalClustering = 50;
+  const elevatedCount = (text.match(/\b(profound|remarkable|extraordinary|transformative|pivotal|unprecedented|comprehensive|significant|sophisticated|fundamental|compelling|innovative)\b/gi) || []).length;
+  const density = (elevatedCount / Math.max(wordCount, 1)) * 100;
+  if (density > 3) lexicalClustering = 85;
+  else if (density > 1.5) lexicalClustering = 65;
+  else if (density > 0.5) lexicalClustering = 40;
+  else lexicalClustering = 15;
+
+  // 4. Paragraph energy uniformity: std dev of paragraph word counts
+  let energyUniformity = 50;
+  if (paragraphs.length >= 3) {
+    const paraCounts = paragraphs.map((p) => p.split(/\s+/).length);
+    const avg = paraCounts.reduce((a, b) => a + b, 0) / paraCounts.length;
+    const stdDev = Math.sqrt(paraCounts.reduce((sum, c) => sum + Math.pow(c - avg, 2), 0) / paraCounts.length);
+    const cv = stdDev / Math.max(avg, 1); // coefficient of variation
+    if (cv < 0.15) energyUniformity = 80; // too uniform
+    else if (cv < 0.25) energyUniformity = 55;
+    else energyUniformity = 20; // good variance
+  }
+
+  // 5. Rhetorical density: casual/conversational markers per 100 words
+  let rhetoricalDensity = 50;
+  let markerCount = 0;
+  for (const marker of RHETORICAL_DENSITY_MARKERS) {
+    const matches = text.match(new RegExp(marker.source, "gi"));
+    if (matches) markerCount += matches.length;
+  }
+  const markerDensity = (markerCount / Math.max(wordCount, 1)) * 100;
+  if (markerDensity > 4) rhetoricalDensity = 80; // over-distributed
+  else if (markerDensity > 2) rhetoricalDensity = 55;
+  else if (markerDensity > 0.5) rhetoricalDensity = 30;
+  else rhetoricalDensity = 15;
+
+  return { openerConfidence, rhythmSimilarity, lexicalClustering, energyUniformity, rhetoricalDensity };
+}
+
+// Apply targeted correction for the worst axis
+function detectorFingerprintCorrection(text: string): string {
+  const fp = computeDetectorFingerprint(text);
+
+  // Find the worst axis (highest score)
+  const axes = [
+    { name: "opener", score: fp.openerConfidence },
+    { name: "rhythm", score: fp.rhythmSimilarity },
+    { name: "lexical", score: fp.lexicalClustering },
+    { name: "energy", score: fp.energyUniformity },
+    { name: "rhetoric", score: fp.rhetoricalDensity },
+  ];
+  axes.sort((a, b) => b.score - a.score);
+  const worst = axes[0];
+
+  // Only correct if worst axis is problematic (>60)
+  if (worst.score <= 60) return text;
+
+  const paragraphs = text.split(/\n\s*\n/);
+
+  switch (worst.name) {
+    case "opener": {
+      // Make first sentence noticeably different in length
+      const sentences = getSentences(paragraphs[0]);
+      if (sentences.length >= 2 && sentences[0].split(/\s+/).length > 12) {
+        // Shorten first sentence
+        const commaPos = sentences[0].indexOf(",", 10);
+        if (commaPos > 0 && commaPos < sentences[0].length - 15) {
+          sentences[0] = sentences[0].slice(0, commaPos).trimEnd() + ".";
+          paragraphs[0] = sentences.join(" ");
+        }
+      }
+      break;
+    }
+    case "rhythm": {
+      // Find first pair of similar-length adjacent sentences and shorten one
+      for (let pi = 0; pi < paragraphs.length; pi++) {
+        const sentences = getSentences(paragraphs[pi]);
+        if (sentences.length < 3) continue;
+        for (let i = 1; i < sentences.length - 1; i++) {
+          const prevLen = sentences[i - 1].split(/\s+/).length;
+          const currLen = sentences[i].split(/\s+/).length;
+          const ratio = Math.min(prevLen, currLen) / Math.max(prevLen, currLen);
+          if (ratio > 0.8 && currLen > 14) {
+            const commaPos = sentences[i].indexOf(",", 12);
+            if (commaPos > 0 && commaPos < sentences[i].length - 12) {
+              sentences[i] = sentences[i].slice(0, commaPos).trimEnd() + ".";
+              paragraphs[pi] = sentences.join(" ");
+              return paragraphs.join("\n\n");
+            }
+          }
+        }
+      }
+      break;
+    }
+    case "energy": {
+      // Shorten the longest paragraph by truncating its longest sentence
+      const paraCounts = paragraphs.map((p) => p.split(/\s+/).length);
+      const maxIdx = paraCounts.indexOf(Math.max(...paraCounts));
+      if (maxIdx >= 0) {
+        const sentences = getSentences(paragraphs[maxIdx]);
+        if (sentences.length >= 3) {
+          const lengths = sentences.map((s) => s.split(/\s+/).length);
+          const longestIdx = lengths.indexOf(Math.max(...lengths));
+          if (lengths[longestIdx] > 16 && longestIdx > 0) {
+            const s = sentences[longestIdx];
+            const commaPos = s.indexOf(",", 15);
+            if (commaPos > 0 && commaPos < s.length - 12) {
+              sentences[longestIdx] = s.slice(0, commaPos).trimEnd() + ".";
+              paragraphs[maxIdx] = sentences.join(" ");
+            }
+          }
+        }
+      }
+      break;
+    }
+    // lexical and rhetoric axes are already handled by earlier passes (27, 26)
+    default:
+      break;
+  }
+
+  return paragraphs.join("\n\n");
+}
+
 // ─── Adaptive Aggression Ceiling ─────────────────────────────────────────────
 // Phase 25: If internal detector score is already below threshold after the
 // core deterministic passes, reduce or skip the strongest later passes to
@@ -2504,14 +2676,17 @@ export async function humanize(
   // Pass 8a4: Register profiler (no LLM call) — enforce mixed sentence register
   const registerMixed = registerProfiler(semanticVaried);
 
+  // Pass 8a5: Detector fingerprint analyzer (no LLM call) — targeted worst-axis correction
+  const fingerprintCorrected = detectorFingerprintCorrection(registerMixed);
+
   // ── Adaptive aggression checkpoint ──
   // Score the text after core passes to determine if later heavy passes are needed.
-  const aggression = determineAggressionLevel(registerMixed);
+  const aggression = determineAggressionLevel(fingerprintCorrected);
 
   // Pass 8b: Deterministic micro-surgery (no LLM call) — skip if already safe
   const surgeryResult = aggression === "minimal"
-    ? registerMixed
-    : deterministicMicroSurgery(registerMixed);
+    ? fingerprintCorrected
+    : deterministicMicroSurgery(fingerprintCorrected);
 
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
