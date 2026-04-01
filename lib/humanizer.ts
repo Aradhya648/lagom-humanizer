@@ -332,18 +332,68 @@ async function semanticPass(
 // Pass 3 — Selective mutation on the full merged text.
 // Runs once on the assembled output, not per chunk — short chunks give
 // noisy detector readings. Gated by score threshold; skipped if already good.
+// Exception: short text (< 120 words) always runs mutation — it lacks the
+// paragraph variance that makes longer text pass ZeroGPT's perplexity check.
 async function mutationPass(
   text: string,
   mode: HumanizeMode
 ): Promise<string> {
   if (mode === "light") return text;
 
+  const wordCount = text.split(/\s+/).length;
+  const isShort = wordCount < 120;
+
   const threshold = mode === "aggressive" ? 42 : 52;
   const { score } = detectAI(text);
 
-  if (score <= threshold) return text; // already good — skip
+  // Short text: always mutate regardless of score (ZeroGPT is perplexity-based
+  // and won't be fooled by surface-level passes alone on short text)
+  if (!isShort && score <= threshold) return text;
 
   return callModel(getMutationPrompt(text), MUTATION_SETTINGS);
+}
+
+// ─── Short-Text Perplexity Hardening ────────────────────────────────────────
+// For text under 120 words, ZeroGPT's perplexity model sees through generic
+// LLM rewrites because there's no paragraph-level variance to hide behind.
+// This dedicated pass forces unpredictability into short text by asking the
+// model to make specific structural breaks.
+
+async function shortTextPerplexityHardening(
+  text: string,
+  mode: HumanizeMode
+): Promise<string> {
+  if (mode === "light") return text;
+  const wordCount = text.split(/\s+/).length;
+  if (wordCount >= 120) return text; // only for short text
+
+  const prompt = `You are editing a SHORT piece of text (under 120 words).
+The goal is to make it read as completely human-written — specifically to pass perplexity-based AI detectors.
+
+REQUIRED changes — apply ALL of these:
+1. Break one sentence into two shorter ones (split at a natural point)
+2. Add one contraction that isn't already there (it's, that's, you'll, we've, isn't, etc.)
+3. Make one sentence start with a word that's unexpected given the context (not "The", "This", "It", "However")
+4. Change one formal word to an everyday word (utilize→use, demonstrate→show, significant→real, etc.)
+5. If every sentence ends with a period, convert one to end with a dash or question
+
+OUTPUT: Only the revised text. No labels, no commentary, no preamble. Same meaning, same topic.
+
+TEXT:
+${text}`;
+
+  try {
+    const result = await callModel(prompt, {
+      temperature: 0.92,
+      topP: 0.95,
+      topK: 40,
+      frequencyPenalty: 0.30,
+    });
+    if (result.trim().length > 20) return result.trim();
+  } catch {
+    // fall through to original
+  }
+  return text;
 }
 
 // ─── First-Paragraph Hardening ───────────────────────────────────────────────
@@ -2691,8 +2741,11 @@ export async function humanize(
   // Pass 3: Targeted mutation on full merged text (gated by score)
   const mutated = await mutationPass(merged, mode);
 
+  // Pass 3a: Short-text perplexity hardening (LLM call, only fires for <120 word texts)
+  const shortHardened = await shortTextPerplexityHardening(mutated, mode);
+
   // Pass 3b: First-paragraph hardening (extra mutation if opener still scores high)
-  const hardened = await firstParagraphHardening(mutated, mode);
+  const hardened = await firstParagraphHardening(shortHardened, mode);
 
   // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
   const cleaned = antiPatternPass(hardened);
