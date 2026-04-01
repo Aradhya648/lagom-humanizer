@@ -2104,8 +2104,10 @@ function rhetoricalDensityLimiter(text: string): string {
       }
     }
 
-    // Threshold: max 1 marker per 2 sentences (density ≤ 0.5)
-    const maxMarkers = Math.max(1, Math.floor(sentences.length * 0.5));
+    // Threshold: max 1 marker per 1.25 sentences (density ≤ 0.8).
+    // Conversational markers are a human signal to external detectors —
+    // only strip when it's extreme over-distribution (every sentence).
+    const maxMarkers = Math.max(1, Math.floor(sentences.length * 0.8));
     if (totalMarkers <= maxMarkers) return para;
 
     // Strip excess markers from mid-paragraph sentences (keep first and last)
@@ -2407,19 +2409,14 @@ function registerProfiler(text: string): string {
     const allSame = registers.every((r) => r === registers[0]);
     if (!allSame) return para; // already mixed — good
 
-    // All sentences at same register — mutate one
+    // All sentences at same register — only flatten elevated paragraphs.
+    // Never elevate plain ones — adding qualifiers sounds more AI, not less.
     if (registers[0] === "elevated") {
-      // Flatten the middle sentence
       const midIdx = Math.floor(sentences.length / 2);
       sentences[midIdx] = flattenToModerate(sentences[midIdx]);
       totalAdjustments++;
-    } else if (registers[0] === "plain") {
-      // Elevate one sentence slightly
-      const midIdx = Math.floor(sentences.length / 2);
-      sentences[midIdx] = elevateToModerate(sentences[midIdx]);
-      totalAdjustments++;
     }
-    // If all moderate — already acceptable, skip
+    // plain or moderate: leave alone — already acceptable
 
     return sentences.join(" ");
   });
@@ -2607,38 +2604,16 @@ function detectorFingerprintCorrection(text: string): string {
 //
 // Pattern: detect vague universal claims and inject grounding qualifiers.
 
+// Only safe single-word swaps that reduce over-confident universals.
+// Removed all phrase rewrites that added formal hedges — those made
+// text sound more AI (academic hedging = AI signal to QuillBot/ZeroGPT).
 const VAGUE_TO_GROUNDED: [RegExp, string][] = [
-  // "X is important" → "in practice, X is important"
-  [/\bThis is (important|significant|crucial|essential|vital)\b/gi, "In practice, this is $1"],
-  // "many people" → "in many cases, people"
-  [/\bMany people\b/g, "In many cases, people"],
-  [/\bmany people\b/g, "in many cases, people"],
-  // "It is clear that" → "From what we see, it's clear that"
-  [/\bIt is clear that\b/gi, "From what we can tell,"],
-  // "always" → "in most cases"
   [/\balways leads to\b/gi, "often leads to"],
   [/\balways results in\b/gi, "typically results in"],
-  // "never" → "rarely" (when used as generalization)
   [/\bnever works\b/gi, "rarely works"],
   [/\bnever succeeds\b/gi, "rarely succeeds"],
-  // Generic "the world" phrases
-  [/\bacross the world\b/gi, "in many regions"],
-  [/\baround the world\b/gi, "across different contexts"],
-  [/\bglobally\b/gi, "in many places"],
-  // "everyone knows" type claims
-  [/\beveryone (knows|agrees|understands)\b/gi, "most observers $1"],
-  [/\bno one (denies|disputes|questions)\b/gi, "few would dispute"],
-  // Vague temporal claims
-  [/\bsince the beginning of time\b/gi, "for a long time"],
-  [/\bthroughout history\b/gi, "historically"],
   [/\bsince time immemorial\b/gi, "for generations"],
-  // Over-confident causal claims
-  [/\bThis (clearly|obviously|undeniably) (shows|proves|demonstrates)\b/gi, "This suggests"],
-  [/\bIt (clearly|obviously) (shows|proves|demonstrates)\b/gi, "It suggests"],
-  // Generic superlatives
-  [/\bthe most important\b/gi, "one of the more important"],
-  [/\bthe biggest\b/gi, "one of the bigger"],
-  [/\bthe greatest\b/gi, "one of the greater"],
+  [/\bsince the beginning of time\b/gi, "for a long time"],
 ];
 
 function lightFactualGrounding(text: string): string {
