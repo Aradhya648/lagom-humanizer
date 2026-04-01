@@ -5,9 +5,51 @@ import {
   getSemanticPrompt,
   getMutationPrompt,
   type HumanizeMode,
+  type SourceRegister as PromptSourceRegister,
 } from "@/prompts/pipeline";
 
 export type { HumanizeMode };
+
+// ─── Source Register Classifier ─────────────────────────────────────────────
+// Classifies the INPUT text register before any transformation.
+// This classification acts as a hard ceiling on tone drift throughout the
+// pipeline — late passes must not inject markers outside the source register.
+
+export type SourceRegister = "academic" | "formal" | "neutral" | "informal";
+
+const ACADEMIC_MARKERS = /\b(furthermore|moreover|consequently|notwithstanding|henceforth|thereby|wherein|thus|hence|herein|aforementioned|et al|i\.e\.|e\.g\.)\b/i;
+const FORMAL_MARKERS = /\b(therefore|however|nevertheless|regarding|pertaining|respectively|accordingly|subsequent|preceding)\b/i;
+const INFORMAL_MARKERS = /\b(gonna|wanna|gotta|kinda|sorta|yeah|nah|okay|ok|hey|yep|nope|stuff|thing is|you know|I mean|right\?|honestly)\b/i;
+const CONTRACTION_RE = /\b(I'm|you're|we're|they're|isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|wouldn't|can't|couldn't|shouldn't|it's|that's|there's|here's|what's|who's|let's|I've|you've|we've|they've|I'll|you'll|we'll|they'll|I'd|you'd|we'd|they'd)\b/gi;
+
+export function classifyRegister(text: string): SourceRegister {
+  const words = text.split(/\s+/).length;
+  const sentences = text.split(/(?<=[.!?])\s+/).length;
+  const avgSentLen = words / Math.max(sentences, 1);
+
+  // Count markers
+  const academicHits = (text.match(ACADEMIC_MARKERS) || []).length;
+  const formalHits = (text.match(FORMAL_MARKERS) || []).length;
+  const informalHits = (text.match(INFORMAL_MARKERS) || []).length;
+  const contractionCount = (text.match(CONTRACTION_RE) || []).length;
+  const contractionDensity = contractionCount / Math.max(words, 1) * 100;
+
+  // High contraction density + informal markers → informal
+  if (contractionDensity > 2.5 || informalHits >= 3) return "informal";
+  if (informalHits >= 2 && contractionDensity > 1.5) return "informal";
+
+  // Academic markers or very long avg sentence + formal vocabulary
+  if (academicHits >= 2) return "academic";
+  if (academicHits >= 1 && avgSentLen > 22) return "academic";
+  if (formalHits >= 3 && avgSentLen > 20) return "academic";
+
+  // Formal markers + no contractions + moderate sentence length
+  if (formalHits >= 2 && contractionDensity < 1) return "formal";
+  if (avgSentLen > 20 && contractionDensity < 0.5) return "formal";
+
+  // Neutral: moderate everything
+  return "neutral";
+}
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
@@ -316,13 +358,14 @@ async function structuralPass(
 // Skipped entirely for light mode.
 async function semanticPass(
   chunks: string[],
-  mode: HumanizeMode
+  mode: HumanizeMode,
+  register?: SourceRegister
 ): Promise<string[]> {
   if (mode === "light") return chunks;
   const settings = SEMANTIC_SETTINGS[mode];
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getSemanticPrompt(chunk, mode, i), settings)
+      callModel(getSemanticPrompt(chunk, mode, i, register as PromptSourceRegister), settings)
         .then((out) => validateChunkOutput(out, chunk))
         .catch(() => chunk) // fall back to structural output on any failure
     )
@@ -361,23 +404,41 @@ async function mutationPass(
 
 async function shortTextPerplexityHardening(
   text: string,
-  mode: HumanizeMode
+  mode: HumanizeMode,
+  register: SourceRegister
 ): Promise<string> {
   if (mode === "light") return text;
   const wordCount = text.split(/\s+/).length;
   if (wordCount >= 120) return text; // only for short text
 
+  const isFormal = register === "academic" || register === "formal";
+
+  // For academic/formal: structural variation without casual drift
+  // For neutral/informal: allow contractions and everyday replacements
+  const contractionRule = isFormal
+    ? "2. Do NOT add contractions — preserve the formal register."
+    : "2. Add one contraction that isn't already there (it's, that's, you'll, we've, isn't, etc.)";
+
+  const wordRule = isFormal
+    ? "4. Replace one overly complex word with a simpler but still formal equivalent (e.g., utilize→use, demonstrate→show)"
+    : "4. Change one formal word to an everyday word (utilize→use, demonstrate→show, significant→real, etc.)";
+
+  const punctuationRule = isFormal
+    ? "5. If every sentence ends with a period, vary one with a colon or semicolon"
+    : "5. If every sentence ends with a period, convert one to end with a dash or question";
+
   const prompt = `You are editing a SHORT piece of text (under 120 words).
 The goal is to make it read as completely human-written — specifically to pass perplexity-based AI detectors.
+IMPORTANT: Preserve the original tone and register. ${isFormal ? "This text is formal/academic — keep it formal." : ""}
 
 REQUIRED changes — apply ALL of these:
 1. Break one sentence into two shorter ones (split at a natural point)
-2. Add one contraction that isn't already there (it's, that's, you'll, we've, isn't, etc.)
+${contractionRule}
 3. Make one sentence start with a word that's unexpected given the context (not "The", "This", "It", "However")
-4. Change one formal word to an everyday word (utilize→use, demonstrate→show, significant→real, etc.)
-5. If every sentence ends with a period, convert one to end with a dash or question
+${wordRule}
+${punctuationRule}
 
-OUTPUT: Only the revised text. No labels, no commentary, no preamble. Same meaning, same topic.
+OUTPUT: Only the revised text. No labels, no commentary, no preamble. Same meaning, same topic, same register.
 
 TEXT:
 ${text}`;
@@ -471,18 +532,27 @@ const ANTI_PATTERNS: { regex: RegExp; replacements: string[] }[] = [
   { regex: /^Interestingly,?\s*/im,      replacements: ["", "One thing that stands out — ", "What's notable: ", ""] },
 ];
 
-function antiPatternPass(text: string): string {
+// Casual replacements forbidden for academic/formal register
+const CASUAL_REPLACEMENT_RE = /^(Sure|Look|Right|So\b|Then again|All told|Plus|The thing is|One thing that stands out|What matters|Worth flagging)/i;
+
+function antiPatternPass(text: string, register: SourceRegister): string {
   const paragraphs = text.split(/\n\s*\n/);
   let replacementIndex = 0;
+  const isFormal = register === "academic" || register === "formal";
 
   const cleaned = paragraphs.map((para) => {
     let result = para;
     for (const { regex, replacements } of ANTI_PATTERNS) {
       if (regex.test(result)) {
-        const pick = replacements[replacementIndex % replacements.length];
+        // For formal/academic: filter to only register-safe replacements
+        const pool = isFormal
+          ? replacements.filter((r) => r === "" || !CASUAL_REPLACEMENT_RE.test(r))
+          : replacements;
+        const safePool = pool.length > 0 ? pool : [""];
+        const pick = safePool[replacementIndex % safePool.length];
         result = result.replace(regex, pick);
         replacementIndex++;
-        break; // one replacement per paragraph — don't stack
+        break;
       }
     }
     return result;
@@ -1193,10 +1263,19 @@ const OVERUSED_BIGRAMS: { bigram: string; replacements: string[] }[] = [
   { bigram: "important to",    replacements: ["worth", "key to", "useful to"] },
 ];
 
-function ngramFrequencySuppression(text: string): string {
-  let result = text;
+// Bigram replacements that inject casual tone (contractions, "you'll find", etc.)
+const CASUAL_BIGRAM_REPLACEMENTS = new Set(["it's", "that's", "there's", "there're", "you'll find", "we see", "on top of that"]);
 
-  for (const { bigram, replacements } of OVERUSED_BIGRAMS) {
+function ngramFrequencySuppression(text: string, register: SourceRegister): string {
+  let result = text;
+  const isFormal = register === "academic" || register === "formal";
+
+  for (const { bigram, replacements: rawReplacements } of OVERUSED_BIGRAMS) {
+    // Filter casual replacements for formal register
+    const replacements = isFormal
+      ? rawReplacements.filter((r) => !CASUAL_BIGRAM_REPLACEMENTS.has(r))
+      : rawReplacements;
+    if (replacements.length === 0) continue;
     const regex = new RegExp(`\\b${bigram}\\b`, "gi");
     const matches = [...result.matchAll(regex)];
 
@@ -1314,9 +1393,9 @@ function paragraphVocabularyBreaker(text: string): string {
 }
 
 // Master multi-detector hardening pass.
-function multiDetectorHardening(text: string): string {
+function multiDetectorHardening(text: string, register: SourceRegister): string {
   let result = text;
-  result = ngramFrequencySuppression(result);
+  result = ngramFrequencySuppression(result, register);
   result = predictableContinuationBreaker(result);
   result = paragraphVocabularyBreaker(result);
   return result;
@@ -1603,6 +1682,129 @@ function styloRemoveExcessBridges(paragraph: string): string {
   }
 
   return sentences.join(" ");
+}
+
+// ─── Conversational Stylization Control ─────────────────────────────────────
+// Limit strong rhetorical devices (fragment questions, emphatic pivots,
+// ellipsis interruptions, rhetorical fragments) to max 1 per 4 sentences.
+// Also limits emphasis channels: max 1 type (italics, dash, ellipsis, fragment)
+// per paragraph to prevent stacked stylized texture.
+
+const STRONG_DEVICE_RE = /(\?[^.!?]*$|^[A-Z][^.!?]{0,25}\?$|^(But|And|Yet|So) the (really |truly |most )?(interesting|tricky|hard|big|key|real) (part|bit|thing|question|issue)\b|^Here['']s the (thing|kicker|deal)|\.{3}|\u2026)/im;
+
+function conversationalStylizationControl(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 4) return para;
+
+    let lastDeviceIdx = -5;
+    let modified = false;
+
+    for (let i = 0; i < sentences.length; i++) {
+      if (STRONG_DEVICE_RE.test(sentences[i])) {
+        if (i - lastDeviceIdx < 4) {
+          // Too close to previous device — flatten this one
+          // Convert question to statement
+          sentences[i] = sentences[i]
+            .replace(/\?$/, ".")
+            .replace(/^(But|And|Yet|So) the (really |truly |most )?(interesting|tricky|hard|big|key|real) (part|bit|thing|question|issue)/i, "One $4")
+            .replace(/^Here['']s the (thing|kicker|deal)/i, "The point");
+          // Strip ellipsis
+          sentences[i] = sentences[i].replace(/\.{3}|\u2026/g, "—");
+          modified = true;
+        }
+        lastDeviceIdx = i;
+      }
+    }
+
+    if (!modified) return para;
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// ─── Emphasis Channel Limiter ────────────────────────────────────────────────
+// If a paragraph already contains one emphasis channel (italics, dash
+// interruption, ellipsis, or sentence fragment), flatten additional ones.
+// Multiple emphasis channels create stylized texture detectors flag.
+
+function emphasisChannelLimiter(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    let channels = 0;
+    let result = para;
+
+    const hasItalics = /\*[^*]+\*/.test(result);
+    const hasDash = /\s—\s/.test(result);
+    const hasEllipsis = /\.{3}|\u2026/.test(result);
+    const hasFragment = /(?<=[.!?]\s)[A-Z][^.!?]{0,20}\.$/.test(result);
+
+    channels = [hasItalics, hasDash, hasEllipsis, hasFragment].filter(Boolean).length;
+
+    if (channels <= 1) return para;
+
+    // Strip the second+ channel type found (preserve the first)
+    let stripped = 0;
+    if (hasItalics && stripped === 0) { stripped++; }
+    else if (hasItalics) { result = result.replace(/\*([^*]+)\*/g, "$1"); }
+
+    if (hasDash && stripped === 0) { stripped++; }
+    else if (hasDash) { result = result.replace(/\s—\s/g, ", "); }
+
+    if (hasEllipsis && stripped === 0) { stripped++; }
+    else if (hasEllipsis) { result = result.replace(/\.{3}|\u2026/g, "."); }
+
+    return result;
+  });
+
+  return result.join("\n\n");
+}
+
+// ─── Contrast Pattern Breaker ────────────────────────────────────────────────
+// Detects repeated "statement → qualification → reflective correction" pattern
+// across adjacent sentences and flattens one occurrence. Pattern:
+//   sentence 1: positive/neutral claim
+//   sentence 2: "but" / "however" / "yet" qualification
+//   sentence 3: broader reflection ("this means" / "what matters" / "the real")
+// If this pattern appears twice in one paragraph, strip the second qualification.
+
+const QUALIFICATION_RE = /^(But|However|Yet|Still|That said|Then again|On the other hand),?\s/i;
+const REFLECTION_RE = /^(This (means|suggests|shows|implies)|What (matters|counts|stands out)|The (real|true|key|broader|deeper))\b/i;
+
+function contrastPatternBreaker(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 5) return para;
+
+    let patternCount = 0;
+
+    for (let i = 1; i < sentences.length - 1; i++) {
+      const isQualification = QUALIFICATION_RE.test(sentences[i]);
+      const isReflection = REFLECTION_RE.test(sentences[i + 1]);
+
+      if (isQualification && isReflection) {
+        patternCount++;
+        if (patternCount >= 2) {
+          // Flatten the second qualification: strip the connector
+          const stripped = sentences[i].replace(QUALIFICATION_RE, "");
+          if (stripped.length > 10) {
+            sentences[i] = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+          }
+          break;
+        }
+      }
+    }
+
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
 }
 
 // Master stylometric correction — applies corrections selectively based on polish score.
@@ -1990,11 +2192,16 @@ function noiseFlatEnding(text: string): string {
   return result.join("\n\n");
 }
 
-// Master micro noise engine — applies all three noise types.
-function microHumanNoiseEngine(text: string): string {
+// Master micro noise engine — applies noise types gated by register.
+// Academic/formal: only flat endings (register-safe). Skip casual bridges and word echo.
+function microHumanNoiseEngine(text: string, register: SourceRegister): string {
   let result = text;
-  result = noiseShortSentence(result);
-  result = noiseWordEcho(result);
+  const isFormal = register === "academic" || register === "formal";
+
+  if (!isFormal) {
+    result = noiseShortSentence(result);
+    result = noiseWordEcho(result);
+  }
   result = noiseFlatEnding(result);
   return result;
 }
@@ -2370,7 +2577,7 @@ type RegisterLevel = "plain" | "moderate" | "elevated";
 const ELEVATED_WORDS_RE = /\b(consequently|nevertheless|furthermore|notwithstanding|subsequently|comprehensive|sophisticated|fundamental|significant|remarkable|extraordinary|unprecedented|indispensable|paradigm|transformative)\b/i;
 const FORMAL_STRUCTURE_RE = /;|—|:|,\s+which\b|,\s+where\b|,\s+although\b/;
 
-function classifyRegister(sentence: string): RegisterLevel {
+function classifySentenceRegister(sentence: string): RegisterLevel {
   const words = sentence.split(/\s+/).length;
 
   // Short plain sentences
@@ -2453,7 +2660,7 @@ function registerProfiler(text: string): string {
     const sentences = getSentences(para);
     if (sentences.length < 3) return para;
 
-    const registers = sentences.map(classifyRegister);
+    const registers = sentences.map(classifySentenceRegister);
 
     // Check if all sentences share the same register
     const allSame = registers.every((r) => r === registers[0]);
@@ -2726,6 +2933,9 @@ export async function humanize(
   const truncated = truncateToWordLimit(inputText, wordLimit);
   const inputWordCount = truncated.split(/\s+/).length;
 
+  // Classify source register BEFORE any transformation — acts as hard ceiling
+  const register = classifyRegister(truncated);
+
   // Split into variable-size chunks for natural local inconsistency
   const chunks = splitIntoVariableChunks(truncated);
 
@@ -2733,7 +2943,7 @@ export async function humanize(
   const structural = await structuralPass(chunks, mode);
 
   // Pass 2: Semantic naturalness — parallel per chunk (skipped for light)
-  const semantic = await semanticPass(structural, mode);
+  const semantic = await semanticPass(structural, mode, register);
 
   // Merge chunks back into full text
   const merged = semantic.join("\n\n");
@@ -2742,13 +2952,13 @@ export async function humanize(
   const mutated = await mutationPass(merged, mode);
 
   // Pass 3a: Short-text perplexity hardening (LLM call, only fires for <120 word texts)
-  const shortHardened = await shortTextPerplexityHardening(mutated, mode);
+  const shortHardened = await shortTextPerplexityHardening(mutated, mode, register);
 
   // Pass 3b: First-paragraph hardening (extra mutation if opener still scores high)
   const hardened = await firstParagraphHardening(shortHardened, mode);
 
   // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
-  const cleaned = antiPatternPass(hardened);
+  const cleaned = antiPatternPass(hardened, register);
 
   // Pass 4b: Filler distribution control (no LLM call)
   const fillerControlled = fillerDistributionPass(cleaned);
@@ -2795,7 +3005,7 @@ export async function humanize(
   // Pass 8c: Multi-detector hardening (no LLM call)
   const multiHardened = aggression === "minimal"
     ? surgeryResult
-    : multiDetectorHardening(surgeryResult);
+    : multiDetectorHardening(surgeryResult, register);
 
   // Pass 9: Low-mutation islands (no LLM call) — always runs (preserves natural feel)
   const islanded = lowMutationIslands(multiHardened, truncated);
@@ -2815,9 +3025,18 @@ export async function humanize(
 
   // Pass 13: Micro human noise engine (no LLM call) — skip if reduced or minimal
   const noised = aggression === "full"
-    ? microHumanNoiseEngine(signatureBroken)
+    ? microHumanNoiseEngine(signatureBroken, register)
     : signatureBroken;
 
+  // Pass 13a: Conversational stylization control (no LLM call) — cap rhetorical devices
+  const stylizationControlled = conversationalStylizationControl(noised);
+
+  // Pass 13b: Emphasis channel limiter (no LLM call) — max 1 emphasis type per paragraph
+  const emphasisLimited = emphasisChannelLimiter(stylizationControlled);
+
+  // Pass 13c: Contrast pattern breaker (no LLM call) — break statement→qualification→reflection
+  const contrastBroken = contrastPatternBreaker(emphasisLimited);
+
   // Pass 14: First paragraph stylometric hardening (no LLM call) — always runs (lightweight)
-  return firstParagraphStylometricHardening(noised);
+  return firstParagraphStylometricHardening(contrastBroken);
 }

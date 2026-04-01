@@ -1,4 +1,5 @@
 export type HumanizeMode = "light" | "medium" | "aggressive";
+export type SourceRegister = "academic" | "formal" | "neutral" | "informal";
 
 // ─── Per-chunk variation hints ───────────────────────────────────────────────
 // Applied by chunk index so adjacent chunks receive different micro-instructions.
@@ -100,25 +101,41 @@ ${textToUse}`;
 export function getSemanticPrompt(
   text: string,
   mode: HumanizeMode,
-  chunkIndex?: number
+  chunkIndex?: number,
+  register?: SourceRegister
 ): string {
+  const isFormal = register === "academic" || register === "formal";
+
   const depthMap: Record<HumanizeMode, string> = {
     light: `- Replace any obvious AI filler phrases from the list below with plain natural alternatives.
 - Make one or two word-choice improvements that sound more like a person wrote them.
 - Keep the professional tone intact.`,
 
-    medium: `- Replace all AI filler phrases from the list below.
+    medium: isFormal
+      ? `- Replace all AI filler phrases from the list below.
+- Do NOT add contractions — the source text is formal/academic and must stay that way.
+- Replace abstract or vague phrases with concrete, specific language.
+- Add one or two connective phrases a real writer would reach for — not a machine.
+- Keep the formal register intact. Do not informalize.`
+      : `- Replace all AI filler phrases from the list below.
 - Use contractions occasionally where they sound natural (it's, that's, don't, they're).
 - Replace abstract or vague phrases with concrete, specific language.
 - Add one or two connective phrases a real writer would reach for — not a machine.
 - Allow mild imperfection: a slightly informal turn of phrase is better than a perfectly smooth one that reads like it was generated.
 - Keep the register professional overall. Do not over-informalize.`,
 
-    aggressive: `- Replace every AI filler phrase and formal connector from the list below.
+    aggressive: isFormal
+      ? `- Replace every AI filler phrase and formal connector from the list below.
+- Do NOT add contractions or casual language — the source text is formal/academic and must stay that way.
+- Replace vague generalities with direct, specific, grounded language.
+- Introduce natural imperfection through varied sentence rhythm and precise word choices — not through casualness.
+- The writing should feel like a knowledgeable person wrote it carefully — not generated, but also not roughened into a different register.
+- Do NOT roughen academic tone. Preserve the source register.`
+      : `- Replace every AI filler phrase and formal connector from the list below.
 - Use contractions freely where natural.
 - Replace vague generalities with direct, specific, grounded language.
 - Introduce natural imperfection: an occasional slight awkwardness, a compressed aside, a thought that ends a touch abruptly. Real writers do this. Machines don't.
-- Where a sentence is over-polished or sounds editorial/academic, roughen it slightly.
+- Where a sentence is over-polished or sounds editorial, roughen it slightly.
 - The writing should feel like someone who knows their subject sat down and wrote — not optimized, not neutral, not symmetric.
 - Occasional abruptness is fine. A short blunt sentence after a long one is human.`,
   };
@@ -128,10 +145,14 @@ export function getSemanticPrompt(
       ? `\nSECTION FOCUS: ${SEMANTIC_HINTS[chunkIndex % SEMANTIC_HINTS.length]}`
       : "";
 
+  const registerCeiling = isFormal
+    ? `\nREGISTER CEILING: The source text is ${register ?? "formal"}. You MUST preserve this register. Do NOT add contractions, slang, casual asides, or colloquial phrasing. Academic text must stay academic. Formal text must stay formal.\n`
+    : "";
+
   return `You are a human editor focused on voice and word choice. Sentence structure has been set by a previous editor — do not change sentence boundaries or restructure syntax.
 
 TASK: Make this text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
-
+${registerCeiling}
 WHAT TO DO:
 ${depthMap[mode]}
 
