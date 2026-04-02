@@ -2,70 +2,69 @@
 
 > *Just the right amount of human.*
 
-An AI-powered text humanizer that transforms AI-generated writing into natural, human-sounding prose. Supports academic and general writing with three intensity modes.
+An AI-powered text humanizer that transforms AI-generated writing into natural, human-sounding prose. Built for writers who want to beat AI detection without losing their message.
 
 ## Features
 
-- **Three humanization modes** — Light, Medium, Aggressive
-- **Live AI detection score** — heuristic-based, runs in the browser
-- **Gemini Flash** as primary AI (free tier) with **HuggingFace Mistral** fallback
-- **Word limit control** — process up to 1000 words per request
-- **Score comparison** — see original vs. humanized AI detection score
-- Dark, editorial UI with smooth micro-interactions
-
-## Setup
-
-1. **Clone the repo**
-   ```bash
-   git clone https://github.com/Aradhya648/lagom-humanizer.git
-   cd lagom-humanizer
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Configure environment variables**
-   ```bash
-   cp .env.example .env.local
-   ```
-   Then edit `.env.local` and fill in your API keys.
-
-4. **Get your free API keys**
-   - **Gemini API key** (primary): https://aistudio.google.com/app/apikey
-   - **HuggingFace API key** (fallback): https://huggingface.co/settings/tokens
-
-5. **Run the dev server**
-   ```bash
-   npm run dev
-   ```
-   Open [http://localhost:3000](http://localhost:3000)
-
-## Environment Variables
-
-| Variable | Description |
-|---|---|
-| `GEMINI_API_KEY` | Google Gemini API key (free tier at Google AI Studio) |
-| `HUGGINGFACE_API_KEY` | HuggingFace Inference API token (optional but recommended) |
+- **Three humanization modes**
+  - **Light** — subtle refinements, preserves original voice
+  - **Medium** — balanced restructuring and word choice
+  - **Aggressive** — full rewrite for maximum humanization
+  
+- **Real-time AI detection** — heuristic-based scoring runs live as you type (600ms debounce)
+- **Before/after comparison** — see your score improvement
+- **Adjustable word limit** — slider from 100 to 1000 words
+- **Live status indicator** — shows when Gemini API is connected
+- **One-click copy** — grab your humanized text instantly
 
 ## Tech Stack
 
-- **Next.js 14** (App Router)
-- **TypeScript**
-- **Tailwind CSS**
-- **Google Gemini Flash** (primary AI)
-- **HuggingFace Mistral-7B** (fallback AI)
+| Layer | Technology |
+|-------|------------|
+| Framework | **Next.js 16** (App Router) |
+| Language | **TypeScript** |
+| Styling | **Tailwind CSS** |
+| AI | **Google Gemini 2.5 Flash** (free tier) |
+| Detection | Custom heuristic detector |
 
-## Deployment
+## Getting Started
 
-Deployed at [thelagom.vercel.app](https://thelagom.vercel.app)
+```bash
+git clone https://github.com/Aradhya648/lagom-humanizer.git
+cd lagom-humanizer
+npm install
+cp .env.example .env.local
+# Add your Gemini API key: https://aistudio.google.com/app/apikey
+npm run dev
+```
 
-To deploy your own:
+Open [http://localhost:3000](http://localhost:3000)
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GEMINI_API_KEY` | Yes | Get it free at [Google AI Studio](https://aistudio.google.com/app/apikey) |
+
+## API
+
+```bash
+POST /api/humanize
+{
+  "text": "Your text...",
+  "mode": "medium",
+  "wordLimit": 500
+}
+```
+
+Response: `{ "humanizedText": "...", "originalScore": 92, "humanizedScore": 23 }`
+
+## Deploy
+
 ```bash
 npx vercel --prod
 ```
 
----
+Live: [thelagom.vercel.app](https://thelagom.vercel.app)
 
-*Lagom · Built for writers, not robots*
+*Lagom — built for writers, not robots.*
