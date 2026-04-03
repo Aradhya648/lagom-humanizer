@@ -1461,6 +1461,112 @@ function perplexityInjector(text: string, register: SourceRegister): string {
   return result.join("\n\n");
 }
 
+// ─── Inter-Paragraph Divergence Pass ────────────────────────────────────────
+// Originality.ai measures semantic coherence across paragraphs. AI text has
+// too-uniform topic distribution — the same content words recur throughout.
+// This pass tracks high-frequency content words across adjacent paragraphs
+// and swaps a repeated word in the second paragraph with a semantically
+// adjacent but lexically distinct synonym, increasing cross-paragraph distance.
+// One swap per paragraph pair max. Register-gated.
+
+// Semantic cluster swaps: word → alternatives from a related but distinct cluster.
+// Unlike perplexityInjector (common→rare), this is about lateral vocabulary shift.
+const DIVERGENCE_CLUSTERS: Record<string, string[]> = {
+  "approach":    ["method", "strategy", "technique"],
+  "method":      ["approach", "framework", "procedure"],
+  "process":     ["procedure", "workflow", "mechanism"],
+  "system":      ["framework", "structure", "model"],
+  "model":       ["framework", "paradigm", "structure"],
+  "result":      ["outcome", "finding", "effect"],
+  "outcome":     ["result", "consequence", "impact"],
+  "impact":      ["effect", "influence", "consequence"],
+  "effect":      ["impact", "outcome", "influence"],
+  "role":        ["function", "purpose", "contribution"],
+  "function":    ["role", "purpose", "operation"],
+  "factor":      ["element", "variable", "component"],
+  "aspect":      ["dimension", "element", "feature"],
+  "issue":       ["challenge", "problem", "concern"],
+  "challenge":   ["difficulty", "obstacle", "issue"],
+  "problem":     ["issue", "challenge", "concern"],
+  "solution":    ["answer", "remedy", "resolution"],
+  "context":     ["setting", "environment", "situation"],
+  "environment": ["context", "setting", "landscape"],
+  "data":        ["evidence", "information", "findings"],
+  "evidence":    ["data", "findings", "support"],
+  "analysis":    ["examination", "assessment", "evaluation"],
+  "research":    ["study", "investigation", "work"],
+  "study":       ["research", "investigation", "analysis"],
+  "level":       ["degree", "extent", "rate"],
+  "degree":      ["level", "extent", "measure"],
+  "point":       ["aspect", "detail", "element"],
+  "case":        ["instance", "example", "situation"],
+  "example":     ["case", "instance", "illustration"],
+  "area":        ["domain", "field", "sector"],
+  "field":       ["area", "domain", "discipline"],
+};
+
+const STOP_WORDS_DIVERGENCE = new Set([
+  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+  "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+  "has", "have", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "this", "that", "these", "those", "it",
+  "its", "they", "them", "their", "we", "our", "you", "your", "he",
+  "she", "his", "her", "as", "if", "so", "not", "also", "can", "into",
+]);
+
+function interParagraphDivergencePass(text: string, register: SourceRegister): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length < 2) return text;
+
+  const isFormal = register === "academic" || register === "formal";
+
+  // Collect content words from each paragraph
+  const paraWords = paragraphs.map((para) =>
+    new Set(
+      para
+        .toLowerCase()
+        .replace(/[^a-z\s]/g, "")
+        .split(/\s+/)
+        .filter((w) => w.length > 3 && !STOP_WORDS_DIVERGENCE.has(w))
+    )
+  );
+
+  const result = paragraphs.map((para, i) => {
+    if (i === 0) return para; // skip first paragraph — no prior to compare
+    const prevWords = paraWords[i - 1];
+
+    // Find the first content word in this paragraph that also appears in the previous
+    const words = para.split(/\s+/);
+    for (let j = 0; j < words.length; j++) {
+      const clean = words[j].toLowerCase().replace(/[^a-z]/g, "");
+      if (clean.length < 4 || STOP_WORDS_DIVERGENCE.has(clean)) continue;
+
+      const alts = DIVERGENCE_CLUSTERS[clean];
+      if (!alts || !prevWords.has(clean)) continue;
+
+      // Pick a replacement not already in this paragraph
+      const currentWords = paraWords[i];
+      const available = alts.filter((a) => !currentWords.has(a));
+      if (available.length === 0) continue;
+
+      const replacement = available[(i + j) % available.length];
+
+      // Preserve punctuation and casing
+      const punctuation = words[j].slice(clean.length);
+      const isCapital = words[j][0] === words[j][0].toUpperCase() && words[j][0] !== words[j][0].toLowerCase();
+      const replaced = (isCapital ? replacement[0].toUpperCase() + replacement.slice(1) : replacement) + punctuation;
+
+      const newWords = [...words];
+      newWords[j] = replaced;
+      return newWords.join(" ");
+    }
+
+    return para;
+  });
+
+  return result.join("\n\n");
+}
+
 // Master multi-detector hardening pass.
 function multiDetectorHardening(text: string, register: SourceRegister): string {
   let result = text;
@@ -3157,8 +3263,13 @@ export async function humanize(
   // raise per-token unpredictability without changing meaning or register.
   const perplexityHardened = perplexityInjector(multiHardened, register);
 
+  // Pass 8e: Inter-paragraph divergence (no LLM call) — Originality.ai targeted
+  // Swaps a cross-paragraph repeated content word with a lateral synonym to
+  // increase vocabulary distance between adjacent paragraphs.
+  const diverged = interParagraphDivergencePass(perplexityHardened, register);
+
   // Pass 9: Low-mutation islands (no LLM call) — always runs (preserves natural feel)
-  const islanded = lowMutationIslands(perplexityHardened, truncated);
+  const islanded = lowMutationIslands(diverged, truncated);
 
   // Pass 10: Length discipline — always runs
   const lengthEnforced = enforceLengthDiscipline(islanded, inputWordCount);
