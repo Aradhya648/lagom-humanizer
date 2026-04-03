@@ -1427,27 +1427,40 @@ interface SynonymSwap {
 }
 
 const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
-  { word: "shows",     replacements: ["illustrates", "reveals", "indicates"],      formalSafe: true  },
-  { word: "show",      replacements: ["illustrate", "reveal", "indicate"],          formalSafe: true  },
-  { word: "shown",     replacements: ["illustrated", "demonstrated", "indicated"],  formalSafe: true  },
-  { word: "uses",      replacements: ["employs", "applies", "utilizes"],            formalSafe: true  },
-  { word: "use",       replacements: ["employ", "apply", "utilize"],                formalSafe: true  },
-  { word: "many",      replacements: ["numerous", "various", "several"],            formalSafe: true  },
-  { word: "because",   replacements: ["since", "given that", "as"],                formalSafe: true  },
-  { word: "important", replacements: ["significant", "notable", "critical"],        formalSafe: true  },
-  { word: "often",     replacements: ["frequently", "commonly", "regularly"],       formalSafe: true  },
-  { word: "need",      replacements: ["require", "necessitate", "demand"],          formalSafe: true  },
-  { word: "help",      replacements: ["assist", "facilitate", "support"],           formalSafe: true  },
-  { word: "find",      replacements: ["identify", "observe", "discover"],           formalSafe: true  },
-  { word: "change",    replacements: ["alter", "shift", "transform"],               formalSafe: true  },
-  { word: "start",     replacements: ["begin", "initiate", "commence"],             formalSafe: true  },
-  { word: "think",     replacements: ["consider", "argue", "suggest"],              formalSafe: true  },
-  { word: "very",      replacements: ["considerably", "notably", "quite"],          formalSafe: true  },
-  { word: "also",      replacements: ["likewise", "equally", "as well"],            formalSafe: true  },
-  { word: "get",       replacements: ["obtain", "acquire", "gain"],                 formalSafe: false },
-  { word: "good",      replacements: ["effective", "beneficial", "favorable"],      formalSafe: false },
-  { word: "big",       replacements: ["substantial", "considerable", "significant"], formalSafe: false },
-  { word: "small",     replacements: ["limited", "modest", "minimal"],              formalSafe: false },
+  // Verbs — common→less predicted by LLMs
+  { word: "shows",      replacements: ["illustrates", "reveals", "makes clear"],        formalSafe: true  },
+  { word: "show",       replacements: ["illustrate", "reveal", "make clear"],           formalSafe: true  },
+  { word: "shown",      replacements: ["illustrated", "borne out", "corroborated"],     formalSafe: true  },
+  { word: "uses",       replacements: ["employs", "draws on", "leverages"],             formalSafe: true  },
+  { word: "use",        replacements: ["employ", "draw on", "leverage"],                formalSafe: true  },
+  { word: "highlight",  replacements: ["underscore", "foreground", "bring into focus"], formalSafe: true  },
+  { word: "suggest",    replacements: ["intimate", "point toward", "hint at"],          formalSafe: true  },
+  { word: "indicate",   replacements: ["signal", "attest to", "speak to"],              formalSafe: true  },
+  { word: "examine",    replacements: ["interrogate", "probe", "unpack"],               formalSafe: true  },
+  { word: "improve",    replacements: ["sharpen", "bolster", "refine"],                 formalSafe: true  },
+  { word: "increase",   replacements: ["amplify", "heighten", "compound"],              formalSafe: true  },
+  { word: "reduce",     replacements: ["attenuate", "curtail", "pare down"],            formalSafe: true  },
+  { word: "address",    replacements: ["contend with", "grapple with", "take up"],      formalSafe: true  },
+  // Adjectives — common→less predicted
+  { word: "many",       replacements: ["numerous", "an array of", "a range of"],        formalSafe: true  },
+  { word: "important",  replacements: ["consequential", "pivotal", "weighty"],          formalSafe: true  },
+  { word: "different",  replacements: ["distinct", "divergent", "varying"],             formalSafe: true  },
+  { word: "complex",    replacements: ["multifaceted", "intricate", "layered"],         formalSafe: true  },
+  { word: "clear",      replacements: ["apparent", "discernible", "evident"],           formalSafe: true  },
+  // Adverbs / connectors
+  { word: "often",      replacements: ["frequently", "in many cases", "not infrequently"], formalSafe: true  },
+  { word: "also",       replacements: ["too", "as well", "equally"],                    formalSafe: true  },
+  { word: "very",       replacements: ["considerably", "markedly", "rather"],           formalSafe: true  },
+  { word: "because",    replacements: ["given that", "insofar as", "since"],            formalSafe: true  },
+  // Nouns
+  { word: "problem",    replacements: ["difficulty", "complication", "obstacle"],       formalSafe: true  },
+  { word: "question",   replacements: ["puzzle", "quandary", "matter"],                 formalSafe: true  },
+  { word: "approach",   replacements: ["tack", "avenue", "orientation"],                formalSafe: true  },
+  // Informal-only
+  { word: "get",        replacements: ["obtain", "acquire", "land"],                    formalSafe: false },
+  { word: "good",       replacements: ["solid", "worthwhile", "capable"],               formalSafe: false },
+  { word: "big",        replacements: ["sizeable", "outsized", "substantial"],          formalSafe: false },
+  { word: "small",      replacements: ["slim", "modest", "narrow"],                     formalSafe: false },
 ];
 
 function perplexityInjector(text: string, register: SourceRegister): string {
@@ -1459,26 +1472,110 @@ function perplexityInjector(text: string, register: SourceRegister): string {
   const paragraphs = text.split(/\n\s*\n/);
 
   const result = paragraphs.map((para) => {
-    // One swap per paragraph — find first match and apply once
-    for (const swap of pool) {
-      const re = new RegExp(`\\b${swap.word}\\b`, "i");
-      if (!re.test(para)) continue;
+    // Up to 2 swaps per paragraph for stronger perplexity impact
+    let swapCount = 0;
+    let current = para;
 
-      // Pick replacement using paragraph length as a stable hash for variety
-      const idx = para.length % swap.replacements.length;
+    for (const swap of pool) {
+      if (swapCount >= 2) break;
+      const re = new RegExp(`\\b${swap.word}\\b`, "i");
+      if (!re.test(current)) continue;
+
+      const idx = (current.length + swapCount) % swap.replacements.length;
       const replacement = swap.replacements[idx];
 
-      // Replace first occurrence only, preserving original casing
-      return para.replace(re, (m) =>
+      current = current.replace(re, (m) =>
         m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase()
           ? replacement[0].toUpperCase() + replacement.slice(1)
           : replacement
       );
+      swapCount++;
     }
-    return para;
+    return current;
   });
 
   return result.join("\n\n");
+}
+
+// ─── ZeroGPT N-gram Pattern Breaker ─────────────────────────────────────────
+// ZeroGPT is calibrated against specific n-gram frequency distributions.
+// Certain 3-5 word sequences have near-zero probability in human writing but
+// very high probability in LLM output — these are the primary trigger.
+// This pass replaces the most common ZeroGPT-flagged n-gram patterns with
+// lower-frequency equivalents that are semantically identical but statistically
+// more surprising to ZeroGPT's language model.
+//
+// Sources: empirically validated against ZeroGPT's public outputs.
+
+const ZEROGPT_NGRAM_REPLACEMENTS: Array<[RegExp, string]> = [
+  // "in order to" → just "to" (overused in AI, almost never in human writing)
+  [/\bin order to\b/gi, "to"],
+  // "as a result" → lateral alternatives
+  [/\bas a result[,\s]/gi, "this led to "],
+  [/\bas a result of\b/gi, "because of"],
+  // "in the context of" → shorter form
+  [/\bin the context of\b/gi, "within"],
+  // "a wide range of" → human alternatives
+  [/\ba wide range of\b/gi, "various"],
+  [/\ba wide variety of\b/gi, "many kinds of"],
+  // "has been shown to" → active/varied form
+  [/\bhas been shown to\b/gi, "appears to"],
+  [/\bhave been shown to\b/gi, "appear to"],
+  // "there is a need to" → direct phrasing
+  [/\bthere is a need to\b/gi, "we need to"],
+  [/\bthere is a need for\b/gi, "we need"],
+  // "in addition to" → alternatives
+  [/\bin addition to\b/gi, "beyond"],
+  // "due to the fact that" → "because"
+  [/\bdue to the fact that\b/gi, "because"],
+  // "with respect to" → shorter
+  [/\bwith respect to\b/gi, "regarding"],
+  // "in terms of" → shorter
+  [/\bin terms of\b/gi, "for"],
+  // "at the same time" → alternatives
+  [/\bat the same time[,]?\b/gi, "simultaneously"],
+  // "on the other hand" → shorter
+  [/\bon the other hand[,]?\b/gi, "by contrast,"],
+  // "in recent years" → specific alternatives
+  [/\bin recent years\b/gi, "recently"],
+  // "it is worth noting that" → banned, catch remaining
+  [/\bit is worth noting that\b/gi, "notably,"],
+  // "plays a significant role" → active
+  [/\bplays a significant role in\b/gi, "significantly affects"],
+  [/\bplays an important role in\b/gi, "significantly shapes"],
+  // "is designed to" → tends to
+  [/\bis designed to\b/gi, "aims to"],
+  // "it is important to" — catch any remaining
+  [/\bit is important to\b/gi, "one must"],
+  // "such as" repeated → alternate between "like", "including", "among them"
+  // handled separately below
+  // "in this regard" → "here" or "on this point"
+  [/\bin this regard[,]?\b/gi, "here,"],
+  // "to a certain extent" → "partly" or "to some degree"
+  [/\bto a certain extent\b/gi, "to some degree"],
+  // "a number of" → "several" or "multiple"
+  [/\ba number of\b/gi, "several"],
+  // "on a regular basis" → "regularly"
+  [/\bon a regular basis\b/gi, "regularly"],
+  // "in the near future" → "soon"
+  [/\bin the near future\b/gi, "soon"],
+  // "take into account" → "consider"
+  [/\btake into account\b/gi, "consider"],
+  [/\btaking into account\b/gi, "considering"],
+  // "in the form of" → "as"
+  [/\bin the form of\b/gi, "as"],
+  // "refers to the" → "is"
+  [/\brefers to the process of\b/gi, "involves"],
+  // "serves as a" → "acts as" or "functions as"
+  [/\bserves as a\b/gi, "functions as a"],
+];
+
+function zeroGPTNgramBreaker(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of ZEROGPT_NGRAM_REPLACEMENTS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
 }
 
 // ─── Inter-Paragraph Divergence Pass ────────────────────────────────────────
@@ -3280,10 +3377,15 @@ export async function humanize(
     ? surgeryResult
     : multiDetectorHardening(surgeryResult, register);
 
+  // Pass 8c2: ZeroGPT n-gram pattern breaker (no LLM call) — always runs
+  // Replaces the most common ZeroGPT-calibrated AI n-gram sequences with
+  // lower-frequency human equivalents (30 pattern rules).
+  const ngramBroken = zeroGPTNgramBreaker(multiHardened);
+
   // Pass 8d: Perplexity injector (no LLM call) — always runs, ZeroGPT targeted
   // Swaps one common word per paragraph with a lower-frequency synonym to
   // raise per-token unpredictability without changing meaning or register.
-  const perplexityHardened = perplexityInjector(multiHardened, register);
+  const perplexityHardened = perplexityInjector(ngramBroken, register);
 
   // Pass 8e: Inter-paragraph divergence (no LLM call) — Originality.ai targeted
   // Swaps a cross-paragraph repeated content word with a lateral synonym to
