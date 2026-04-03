@@ -1393,6 +1393,74 @@ function paragraphVocabularyBreaker(text: string): string {
   return result.join("\n\n");
 }
 
+// ─── Perplexity Injector ─────────────────────────────────────────────────────
+// ZeroGPT is heavily perplexity-based — it flags text where token sequences
+// are too predictable under a language model. This pass swaps one common word
+// per paragraph with a lower-frequency synonym from a curated pool, increasing
+// per-token surprise without changing meaning.
+// Register-gated: only formalSafe swaps are used for academic/formal text.
+
+interface SynonymSwap {
+  word: string;
+  replacements: string[];
+  formalSafe: boolean;
+}
+
+const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
+  { word: "shows",     replacements: ["illustrates", "reveals", "indicates"],      formalSafe: true  },
+  { word: "show",      replacements: ["illustrate", "reveal", "indicate"],          formalSafe: true  },
+  { word: "shown",     replacements: ["illustrated", "demonstrated", "indicated"],  formalSafe: true  },
+  { word: "uses",      replacements: ["employs", "applies", "utilizes"],            formalSafe: true  },
+  { word: "use",       replacements: ["employ", "apply", "utilize"],                formalSafe: true  },
+  { word: "many",      replacements: ["numerous", "various", "several"],            formalSafe: true  },
+  { word: "because",   replacements: ["since", "given that", "as"],                formalSafe: true  },
+  { word: "important", replacements: ["significant", "notable", "critical"],        formalSafe: true  },
+  { word: "often",     replacements: ["frequently", "commonly", "regularly"],       formalSafe: true  },
+  { word: "need",      replacements: ["require", "necessitate", "demand"],          formalSafe: true  },
+  { word: "help",      replacements: ["assist", "facilitate", "support"],           formalSafe: true  },
+  { word: "find",      replacements: ["identify", "observe", "discover"],           formalSafe: true  },
+  { word: "change",    replacements: ["alter", "shift", "transform"],               formalSafe: true  },
+  { word: "start",     replacements: ["begin", "initiate", "commence"],             formalSafe: true  },
+  { word: "think",     replacements: ["consider", "argue", "suggest"],              formalSafe: true  },
+  { word: "very",      replacements: ["considerably", "notably", "quite"],          formalSafe: true  },
+  { word: "also",      replacements: ["likewise", "equally", "as well"],            formalSafe: true  },
+  { word: "get",       replacements: ["obtain", "acquire", "gain"],                 formalSafe: false },
+  { word: "good",      replacements: ["effective", "beneficial", "favorable"],      formalSafe: false },
+  { word: "big",       replacements: ["substantial", "considerable", "significant"], formalSafe: false },
+  { word: "small",     replacements: ["limited", "modest", "minimal"],              formalSafe: false },
+];
+
+function perplexityInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const pool = isFormal
+    ? PERPLEXITY_SWAP_POOL.filter((s) => s.formalSafe)
+    : PERPLEXITY_SWAP_POOL;
+
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    // One swap per paragraph — find first match and apply once
+    for (const swap of pool) {
+      const re = new RegExp(`\\b${swap.word}\\b`, "i");
+      if (!re.test(para)) continue;
+
+      // Pick replacement using paragraph length as a stable hash for variety
+      const idx = para.length % swap.replacements.length;
+      const replacement = swap.replacements[idx];
+
+      // Replace first occurrence only, preserving original casing
+      return para.replace(re, (m) =>
+        m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase()
+          ? replacement[0].toUpperCase() + replacement.slice(1)
+          : replacement
+      );
+    }
+    return para;
+  });
+
+  return result.join("\n\n");
+}
+
 // Master multi-detector hardening pass.
 function multiDetectorHardening(text: string, register: SourceRegister): string {
   let result = text;
@@ -3008,8 +3076,13 @@ export async function humanize(
     ? surgeryResult
     : multiDetectorHardening(surgeryResult, register);
 
+  // Pass 8d: Perplexity injector (no LLM call) — always runs, ZeroGPT targeted
+  // Swaps one common word per paragraph with a lower-frequency synonym to
+  // raise per-token unpredictability without changing meaning or register.
+  const perplexityHardened = perplexityInjector(multiHardened, register);
+
   // Pass 9: Low-mutation islands (no LLM call) — always runs (preserves natural feel)
-  const islanded = lowMutationIslands(multiHardened, truncated);
+  const islanded = lowMutationIslands(perplexityHardened, truncated);
 
   // Pass 10: Length discipline — always runs
   const lengthEnforced = enforceLengthDiscipline(islanded, inputWordCount);
