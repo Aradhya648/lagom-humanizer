@@ -1983,45 +1983,45 @@ function contrastPatternBreaker(text: string): string {
 }
 
 // Master stylometric correction — applies corrections selectively based on polish score.
-function stylometricCorrectionLayer(text: string): string {
+function stylometricCorrectionLayer(text: string, register: SourceRegister = "neutral"): string {
+  const isFormal = register === "academic" || register === "formal";
+  // For formal/academic: raise thresholds so only genuinely AI-over-polished
+  // sentences get touched. Never flatten complex sentence architecture.
+  const avgThreshold = isFormal ? 60 : 40;
+  const sentenceThreshold = isFormal ? 65 : 45;
+  const flattenThreshold = isFormal ? 999 : 70; // effectively disabled for formal
+
   const paragraphs = text.split(/\n\s*\n/);
 
   const corrected = paragraphs.map((para) => {
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
 
-    // Score each sentence
     const scores = sentences.map(s => sentencePolishScore(s));
     const avgPolish = scores.reduce((a, b) => a + b, 0) / scores.length;
 
-    // Only apply corrections if average polish is high (>40)
-    if (avgPolish <= 40) return para;
+    if (avgPolish <= avgThreshold) return para;
 
-    // Apply sentence-level corrections to the most polished sentences
     let correctionCount = 0;
-    const maxCorrections = Math.ceil(sentences.length * 0.35); // correct up to ~35%
+    const maxCorrections = Math.ceil(sentences.length * (isFormal ? 0.2 : 0.35));
 
     const processed = sentences.map((sentence, i) => {
       if (correctionCount >= maxCorrections) return sentence;
-      if (scores[i] < 45) return sentence; // this sentence is fine
+      if (scores[i] < sentenceThreshold) return sentence;
 
       let result = sentence;
 
-      // Apply corrections in priority order — only one per sentence
-      if (scores[i] >= 70) {
-        // Very polished: flatten + simplify
+      if (scores[i] >= flattenThreshold) {
         result = styloFlattenSentence(result);
         if (result !== sentence) { correctionCount++; return result; }
         result = styloSimplify(result);
         if (result !== sentence) { correctionCount++; return result; }
       } else if (scores[i] >= 55) {
-        // Moderately polished: simplify or disturb punctuation
         result = styloSimplify(result);
         if (result !== sentence) { correctionCount++; return result; }
         result = styloPunctuationDisturb(result);
         if (result !== sentence) { correctionCount++; return result; }
       } else {
-        // Mildly polished: just punctuation disturbance
         result = styloPunctuationDisturb(result);
         if (result !== sentence) { correctionCount++; return result; }
       }
@@ -2029,7 +2029,6 @@ function stylometricCorrectionLayer(text: string): string {
       return result;
     });
 
-    // Apply paragraph-level corrections
     let paragraphResult = processed.join(" ");
     paragraphResult = styloCadenceInterrupt(paragraphResult);
     paragraphResult = styloRemoveExcessBridges(paragraphResult);
@@ -3236,7 +3235,10 @@ export async function humanize(
   const semanticVaried = semanticVarianceInjector(spikeFlattened);
 
   // Pass 8a4: Register profiler (no LLM call) — enforce mixed sentence register
-  const registerMixed = registerProfiler(semanticVaried);
+  // Skipped for academic/formal: elevated vocabulary is correct in that register,
+  // not an AI signal. Flattening it would damage the source register.
+  const isFormalRegister = register === "academic" || register === "formal";
+  const registerMixed = isFormalRegister ? semanticVaried : registerProfiler(semanticVaried);
 
   // Pass 8a5: Detector fingerprint analyzer (no LLM call) — targeted worst-axis correction
   const fingerprintCorrected = detectorFingerprintCorrection(registerMixed);
@@ -3275,9 +3277,10 @@ export async function humanize(
   const lengthEnforced = enforceLengthDiscipline(islanded, inputWordCount);
 
   // Pass 11: Stylometric correction layer (no LLM call) — skip if minimal aggression
+  // Register-aware: formal/academic raises thresholds and disables sentence flattening.
   const styloCorrected = aggression === "minimal"
     ? lengthEnforced
-    : stylometricCorrectionLayer(lengthEnforced);
+    : stylometricCorrectionLayer(lengthEnforced, register);
 
   // Pass 11b: Opener diversity pass (no LLM call) — GPTZero first-word diversity signal
   // Runs on reduced + full; skip if minimal (text already passed detection threshold)
