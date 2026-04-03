@@ -1472,12 +1472,12 @@ function perplexityInjector(text: string, register: SourceRegister): string {
   const paragraphs = text.split(/\n\s*\n/);
 
   const result = paragraphs.map((para) => {
-    // Up to 2 swaps per paragraph for stronger perplexity impact
+    // Up to 3 swaps per paragraph for maximum perplexity impact
     let swapCount = 0;
     let current = para;
 
     for (const swap of pool) {
-      if (swapCount >= 2) break;
+      if (swapCount >= 3) break;
       const re = new RegExp(`\\b${swap.word}\\b`, "i");
       if (!re.test(current)) continue;
 
@@ -1679,6 +1679,123 @@ function interParagraphDivergencePass(text: string, register: SourceRegister): s
     }
 
     return para;
+  });
+
+  return result.join("\n\n");
+}
+
+// ─── Structural Perplexity Injector ─────────────────────────────────────────
+// ZeroGPT's remaining 10-20% detection comes from predictable sentence
+// structure, not just word choice. This pass injects structural surprises:
+//   A) Parenthetical insertions — "(though X)" creates unexpected token sequences
+//   B) Em-dash interruptions — "X — contrary to Y — Z" breaks prediction
+//   C) List pattern breaking — "X, Y, and Z" is highly predictable; reorder or rephrase
+//   D) Semicolon splicing — convert one comma to semicolon per paragraph
+//
+// Max 2 structural modifications per paragraph. Register-safe.
+
+const FORMAL_PARENTHETICALS = [
+  "(though this remains debated)",
+  "(at least in the current literature)",
+  "(a point worth emphasizing)",
+  "(admittedly)",
+  "(to varying degrees)",
+  "(with some exceptions)",
+  "(see below)",
+  "(broadly speaking)",
+  "(in most formulations)",
+  "(as one might expect)",
+];
+
+const CASUAL_PARENTHETICALS = [
+  "(though not always)",
+  "(at least in theory)",
+  "(more or less)",
+  "(admittedly)",
+  "(to some extent)",
+  "(give or take)",
+  "(for now)",
+  "(roughly speaking)",
+  "(in most cases)",
+  "(worth noting)",
+];
+
+// Detect "X, Y, and Z" list patterns — highly predictable to LLMs
+const LIST_PATTERN_RE = /(\b\w+),\s+(\w+),?\s+and\s+(\w+)\b/;
+
+function structuralPerplexityInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const parentheticals = isFormal ? FORMAL_PARENTHETICALS : CASUAL_PARENTHETICALS;
+
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalMods = 0;
+
+  const result = paragraphs.map((para, pIdx) => {
+    if (totalMods >= 5) return para; // cap total modifications
+
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    let paraModCount = 0;
+
+    const processed = sentences.map((sentence, sIdx) => {
+      if (paraModCount >= 2) return sentence;
+      const words = sentence.split(/\s+/).length;
+
+      // Modification A: Insert parenthetical into sentences with 18+ words
+      // after the first comma, if this is the 2nd or 3rd sentence in the paragraph
+      if (words >= 18 && sIdx >= 1 && sIdx <= 2 && paraModCount === 0) {
+        const commaPos = sentence.indexOf(",");
+        if (commaPos > 10 && commaPos < sentence.length - 20) {
+          const paren = parentheticals[(pIdx + sIdx + totalMods) % parentheticals.length];
+          const before = sentence.slice(0, commaPos + 1);
+          const after = sentence.slice(commaPos + 1);
+          paraModCount++;
+          totalMods++;
+          return `${before} ${paren}${after}`;
+        }
+      }
+
+      // Modification B: Convert "X, Y, and Z" list to "X and Y — along with Z"
+      if (LIST_PATTERN_RE.test(sentence) && paraModCount < 2) {
+        const modified = sentence.replace(LIST_PATTERN_RE, (_, a, b, c) => {
+          return `${a} and ${b} — along with ${c}`;
+        });
+        if (modified !== sentence) {
+          paraModCount++;
+          totalMods++;
+          return modified;
+        }
+      }
+
+      // Modification C: Convert one comma to semicolon in long sentences
+      if (words >= 20 && paraModCount < 2) {
+        const commas = [];
+        let searchFrom = 0;
+        while (true) {
+          const pos = sentence.indexOf(",", searchFrom);
+          if (pos === -1) break;
+          commas.push(pos);
+          searchFrom = pos + 1;
+        }
+        // Pick the middle comma if there are 2+
+        if (commas.length >= 2) {
+          const midComma = commas[Math.floor(commas.length / 2)];
+          // Only convert if there's enough text on both sides
+          if (midComma > 15 && midComma < sentence.length - 15) {
+            const before = sentence.slice(0, midComma);
+            const after = sentence.slice(midComma + 1);
+            paraModCount++;
+            totalMods++;
+            return `${before};${after}`;
+          }
+        }
+      }
+
+      return sentence;
+    });
+
+    return processed.join(" ");
   });
 
   return result.join("\n\n");
@@ -3469,10 +3586,15 @@ export async function humanize(
   // lower-frequency human equivalents (30 pattern rules).
   const ngramBroken = zeroGPTNgramBreaker(multiHardened);
 
+  // Pass 8c3: Structural perplexity injector (no LLM call) — always runs
+  // Injects parenthetical asides, em-dash interruptions, list pattern breaks,
+  // and semicolon splices to create structural token unpredictability.
+  const structuralPerplexed = structuralPerplexityInjector(ngramBroken, register);
+
   // Pass 8d: Perplexity injector (no LLM call) — always runs, ZeroGPT targeted
   // Swaps one common word per paragraph with a lower-frequency synonym to
   // raise per-token unpredictability without changing meaning or register.
-  const perplexityHardened = perplexityInjector(ngramBroken, register);
+  const perplexityHardened = perplexityInjector(structuralPerplexed, register);
 
   // Pass 8e: Inter-paragraph divergence (no LLM call) — Originality.ai targeted
   // Swaps a cross-paragraph repeated content word with a lateral synonym to
