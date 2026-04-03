@@ -30,8 +30,11 @@ export function getStructuralPrompt(
   text: string,
   mode: HumanizeMode,
   chunkIndex?: number,
-  annotatedText?: string
+  annotatedText?: string,
+  register?: SourceRegister
 ): string {
+  const isFormal = register === "academic" || register === "formal";
+
   const scope: Record<HumanizeMode, string> = {
     light:
       "Minimal — find 2-3 sentences that are rhythmically identical to their neighbors and fix only those. Leave everything else alone.",
@@ -58,6 +61,12 @@ Not every sentence should feel rewritten. Preserve [A] sentences almost exactly.
 `
     : "";
 
+  const registerBlock = isFormal
+    ? `
+REGISTER CONSTRAINT: The source text is ${register}. Preserve complex sentence architecture — do NOT over-fragment long formal sentences into short choppy ones. Long subordinate clauses, semicolons, and multi-clause constructions are appropriate here. Break rhythm by varying clause weight, not by chopping sentences into fragments.
+`
+    : "";
+
   const textToUse = annotatedText ?? text;
 
   return `You are a structural copy editor. Your only task is sentence rhythm and syntax. Do not touch word choices, phrases, or meaning.
@@ -65,7 +74,7 @@ Not every sentence should feel rewritten. Preserve [A] sentences almost exactly.
 TASK: Restructure the sentences below so they no longer sound uniform and machine-generated.
 
 SCOPE: ${scope[mode]}${hint}
-${classificationBlock}WHAT TO DO:
+${registerBlock}${classificationBlock}WHAT TO DO:
 - Vary sentence lengths drastically. AI writes all sentences at similar word counts. Break that — some sentences should be short (under 12 words), some long (25+).
 - Split compound sentences that chain parallel clauses: "X does A, Y does B, and Z does C" — split or restructure these.
 - Merge short choppy sentences that belong together into one longer flowing sentence.

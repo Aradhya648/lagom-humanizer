@@ -336,14 +336,15 @@ function validateChunkOutput(output: string, fallback: string): string {
 // LLM knows which sentences to preserve vs. rewrite aggressively.
 async function structuralPass(
   chunks: string[],
-  mode: HumanizeMode
+  mode: HumanizeMode,
+  register?: SourceRegister
 ): Promise<string[]> {
   const settings = STRUCTURAL_SETTINGS[mode];
   return Promise.all(
     chunks.map((chunk, i) => {
       const { annotated } = annotateChunkWithClasses(chunk);
       return callModel(
-        getStructuralPrompt(chunk, mode, i, annotated),
+        getStructuralPrompt(chunk, mode, i, annotated, register),
         settings
       )
         .then((out) => validateChunkOutput(out, chunk))
@@ -2940,7 +2941,7 @@ export async function humanize(
   const chunks = splitIntoVariableChunks(truncated);
 
   // Pass 1: Structural rewrite — parallel per chunk
-  const structural = await structuralPass(chunks, mode);
+  const structural = await structuralPass(chunks, mode, register);
 
   // Pass 2: Semantic naturalness — parallel per chunk (skipped for light)
   const semantic = await semanticPass(structural, mode, register);
