@@ -2156,6 +2156,93 @@ function stylometricCorrectionLayer(text: string, register: SourceRegister = "ne
   return corrected.join("\n\n");
 }
 
+// ─── GPTZero Burstiness Injector ─────────────────────────────────────────────
+// GPTZero's primary metric is "burstiness" — variance in per-sentence
+// perplexity. AI text has uniformly complex sentences. Human text alternates
+// between very short/simple sentences and long/complex ones.
+//
+// This pass measures sentence-length standard deviation per paragraph.
+// If burstiness is too low (std dev < 5 words), it forces variance by:
+//   A) Splitting one long sentence at its first comma → creates a short sentence
+//   B) Inserting a formal-safe short bridge sentence if no split point exists
+//
+// Works for ALL registers — formal bridges are used for academic/formal text.
+
+const FORMAL_SHORT_BRIDGES = [
+  "This distinction matters.",
+  "The evidence is clear.",
+  "That much is certain.",
+  "The pattern holds.",
+  "This warrants scrutiny.",
+  "The implications run deep.",
+  "Not all scholars agree.",
+  "The data confirms this.",
+  "This remains contested.",
+  "The gap persists.",
+];
+
+const CASUAL_SHORT_BRIDGES = [
+  "That part matters.",
+  "This changed things.",
+  "It shows.",
+  "The difference is real.",
+  "That stood out.",
+  "Not everyone agrees.",
+  "Simple as that.",
+  "And it works.",
+  "Worth noting.",
+  "The point stands.",
+];
+
+function burstinessInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const bridges = isFormal ? FORMAL_SHORT_BRIDGES : CASUAL_SHORT_BRIDGES;
+
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalInjections = 0;
+
+  const result = paragraphs.map((para, pIdx) => {
+    if (totalInjections >= 3) return para; // cap total injections
+
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para;
+
+    const lengths = sentences.map((s) => s.split(/\s+/).length);
+    const avg = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+    const stdDev = Math.sqrt(
+      lengths.reduce((sum, l) => sum + Math.pow(l - avg, 2), 0) / lengths.length
+    );
+
+    // If burstiness is already high, skip
+    if (stdDev >= 5) return para;
+
+    // Strategy A: Find the longest sentence and try to split at first comma
+    const longestIdx = lengths.indexOf(Math.max(...lengths));
+    const longest = sentences[longestIdx];
+
+    if (lengths[longestIdx] > 18) {
+      const commaPos = longest.indexOf(",", 20);
+      if (commaPos > 0 && commaPos < longest.length - 15) {
+        const firstHalf = longest.slice(0, commaPos).trimEnd() + ".";
+        const secondHalf = longest.slice(commaPos + 1).trimStart();
+        const secondCapped = secondHalf.charAt(0).toUpperCase() + secondHalf.slice(1);
+        sentences[longestIdx] = firstHalf;
+        sentences.splice(longestIdx + 1, 0, secondCapped);
+        totalInjections++;
+        return sentences.join(" ");
+      }
+    }
+
+    // Strategy B: Insert a short bridge sentence after the 2nd sentence
+    const bridge = bridges[(pIdx + totalInjections) % bridges.length];
+    sentences.splice(2, 0, bridge);
+    totalInjections++;
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
 // ─── Opener Diversity Pass ───────────────────────────────────────────────────
 // GPTZero weights sentence-opener diversity heavily. When 2+ sentences in the
 // same paragraph start with the same word, the second gets its opener swapped
@@ -3404,11 +3491,16 @@ export async function humanize(
     ? lengthEnforced
     : stylometricCorrectionLayer(lengthEnforced, register);
 
+  // Pass 11a: GPTZero burstiness injector (no LLM call) — always runs
+  // Forces sentence-length variance within paragraphs that have uniform complexity.
+  // GPTZero's primary metric. Splits long sentences or inserts register-safe bridges.
+  const bursty = burstinessInjector(styloCorrected, register);
+
   // Pass 11b: Opener diversity pass (no LLM call) — GPTZero first-word diversity signal
   // Runs on reduced + full; skip if minimal (text already passed detection threshold)
   const openerDiversified = aggression !== "minimal"
-    ? openerDiversityPass(styloCorrected)
-    : styloCorrected;
+    ? openerDiversityPass(bursty)
+    : bursty;
 
   // Pass 12: Sentence signature breaker (no LLM call) — skip if reduced or minimal
   const signatureBroken = aggression === "full"
