@@ -1934,6 +1934,82 @@ function stylometricCorrectionLayer(text: string): string {
   return corrected.join("\n\n");
 }
 
+// ─── Opener Diversity Pass ───────────────────────────────────────────────────
+// GPTZero weights sentence-opener diversity heavily. When 2+ sentences in the
+// same paragraph start with the same word, the second gets its opener swapped
+// from a curated prefix pool. Operates at the paragraph level — max 2 swaps
+// per paragraph so it never over-rewrites. Runs on reduced + full aggression.
+
+// Maps a sentence-starting word to alternative openers.
+// Replacements are prefix strings — the original sentence body is appended.
+const OPENER_SWAPS: Record<string, string[]> = {
+  "this":   ["That", "The", "It"],
+  "the":    ["Its", "That", "Each"],
+  "it":     ["This", "That", "The result"],
+  "these":  ["Such", "Those", "The"],
+  "there":  ["Here", "That said,", "In practice,"],
+  "that":   ["This", "It", "The fact"],
+  "they":   ["Both", "Each of them", "Those"],
+  "we":     ["The team", "Our approach", "In doing so,"],
+  "one":    ["A key", "Each", "An important"],
+  "when":   ["As", "Once", "Wherever"],
+  "while":  ["Although", "Even as", "As"],
+  "since":  ["Because", "As", "Given that"],
+  "for":    ["To", "In order to", "As a way to"],
+  "with":   ["Using", "By", "Through"],
+  "by":     ["Through", "Via", "Using"],
+  "in":     ["Within", "Across", "At"],
+  "as":     ["While", "When", "Given that"],
+  "if":     ["Should", "When", "Assuming"],
+  "most":   ["Many", "The majority of", "A large portion of"],
+  "many":   ["Several", "A number of", "Numerous"],
+  "some":   ["A few", "Certain", "Several"],
+  "each":   ["Every", "Any given", "Individual"],
+  "both":   ["Each", "Either", "The two"],
+};
+
+function openerDiversityPass(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const result = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+
+    let swaps = 0;
+    const seen = new Map<string, number>(); // opener word → first sentence index
+
+    const rewritten = sentences.map((s, i) => {
+      if (swaps >= 2) return s; // max 2 swaps per paragraph
+
+      const firstWord = s.split(/\s+/)[0].toLowerCase().replace(/[^a-z]/g, "");
+      const prevIdx = seen.get(firstWord);
+
+      if (prevIdx !== undefined && i > prevIdx) {
+        // Duplicate opener found — try to swap this sentence's opener
+        const alts = OPENER_SWAPS[firstWord];
+        if (alts) {
+          const body = s.slice(firstWord.length).trimStart();
+          // Strip leading capital from body if it's now mid-sentence
+          const alt = alts[(i + para.length) % alts.length];
+          const joined = alt + (body.charAt(0) === body.charAt(0).toUpperCase() && alt.endsWith(",")
+            ? " " + body.charAt(0).toLowerCase() + body.slice(1)
+            : " " + body);
+          swaps++;
+          return joined;
+        }
+      } else {
+        seen.set(firstWord, i);
+      }
+
+      return s;
+    });
+
+    return rewritten.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
 // ─── Sentence Signature Breaker ─────────────────────────────────────────────
 // Phase 21: Detects consecutive sentences that share a similar "signature" —
 // similar word count, similar punctuation shape, and similar rhetorical
@@ -3092,10 +3168,16 @@ export async function humanize(
     ? lengthEnforced
     : stylometricCorrectionLayer(lengthEnforced);
 
+  // Pass 11b: Opener diversity pass (no LLM call) — GPTZero first-word diversity signal
+  // Runs on reduced + full; skip if minimal (text already passed detection threshold)
+  const openerDiversified = aggression !== "minimal"
+    ? openerDiversityPass(styloCorrected)
+    : styloCorrected;
+
   // Pass 12: Sentence signature breaker (no LLM call) — skip if reduced or minimal
   const signatureBroken = aggression === "full"
-    ? sentenceSignatureBreaker(styloCorrected)
-    : styloCorrected;
+    ? sentenceSignatureBreaker(openerDiversified)
+    : openerDiversified;
 
   // Pass 13: Micro human noise engine (no LLM call) — skip if reduced or minimal
   const noised = aggression === "full"
