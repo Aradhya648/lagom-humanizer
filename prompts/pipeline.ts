@@ -154,14 +154,58 @@ export function getSemanticPrompt(
       ? `\nSECTION FOCUS: ${SEMANTIC_HINTS[chunkIndex % SEMANTIC_HINTS.length]}`
       : "";
 
+  // Register ceiling — for formal/academic text this is the FIRST thing the LLM sees.
+  // It must override all other instructions. Listed explicitly with forbidden examples.
   const registerCeiling = isFormal
-    ? `\nREGISTER CEILING: The source text is ${register ?? "formal"}. You MUST preserve this register. Do NOT add contractions, slang, casual asides, or colloquial phrasing. Academic text must stay academic. Formal text must stay formal.\n`
+    ? `
+══════════════════════════════════════════════
+REGISTER LOCK — THIS OVERRIDES ALL OTHER INSTRUCTIONS
+The source text is ${register ?? "formal"}. You are NOT permitted to change the register.
+
+ABSOLUTELY FORBIDDEN — do not produce any of these under any circumstance:
+- Contractions of any kind: it's, we've, they're, isn't, don't, aren't, can't, won't, etc.
+- Casual openers: "Honestly,", "Look,", "And honestly,", "I mean,", "Think about it,"
+- Colloquial phrases: "not by a long shot", "absolutely everywhere", "a whole lot"
+- Direct address to the reader: "think about it", "you know", "right?"
+- Informal intensifiers: "really", "truly", "absolutely" used as fillers
+- Emphasis via asterisks or italics (*word*)
+- Exclamatory or rhetorical questions as rhetorical devices
+- Fragmented speech or trailing punctuation (... for effect)
+- Conversational bridges: "And that's", "So what does this mean?", "Here's the thing:"
+
+WHAT THIS REGISTER REQUIRES:
+- Complete formal sentences with academic vocabulary
+- Third-person or passive voice where appropriate
+- Precise technical terminology preserved exactly as given
+- Complex subordinate clauses are CORRECT here — do not simplify them
+══════════════════════════════════════════════
+`
     : "";
 
-  return `You are a human editor focused on voice and word choice. Sentence structure has been set by a previous editor — do not change sentence boundaries or restructure syntax.
+  const connectorLimits = isFormal
+    ? `
+CONNECTOR WORD LIMITS (formal text may use these but not over-repeat):
+- "however": at most twice. Use "yet" or "though" as alternatives.
+- "therefore" / "thus": at most once each.
+- "furthermore" / "moreover": permitted — they are correct in formal register. Limit to 2 total.
+- "consequently" / "accordingly": permitted. Limit to 1 each.
+- "in conclusion": banned entirely — use "taken together," or "this evidence suggests".
+`
+    : `
+HARD LIMITS ON CONNECTOR WORDS (overuse is a primary AI detector signal):
+- "however": use at most once in the entire section. Zero is fine.
+- "therefore": use at most once. Prefer "so" or restructure the sentence.
+- "moreover": use zero times. Find a concrete alternative.
+- "furthermore": use zero times. Find a concrete alternative.
+- "additionally": use zero times. Find a concrete alternative.
+- "consequently": use zero times. Find a concrete alternative.
+- "in conclusion": banned entirely.
+`;
 
-TASK: Make this text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
+  return `You are a human editor focused on voice and word choice. Sentence structure has been set by a previous editor — do not change sentence boundaries or restructure syntax.
 ${registerCeiling}
+TASK: Make this text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
+
 WHAT TO DO:
 ${depthMap[mode]}
 
@@ -176,16 +220,7 @@ BANNED PHRASES — remove or rewrite every instance that appears:
 "it can be argued" | "it is undeniable" | "it is clear that" | "it is evident that"
 "needless to say" | "it goes without saying"
 "in light of" | "taking into account" | "with regards to"
-
-HARD LIMITS ON CONNECTOR WORDS (overuse is a primary AI detector signal):
-- "however": use at most once in the entire section. Zero is fine.
-- "therefore": use at most once. Prefer "so" or restructure the sentence.
-- "moreover": use zero times. Find a concrete alternative.
-- "furthermore": use zero times. Find a concrete alternative.
-- "additionally": use zero times. Find a concrete alternative.
-- "consequently": use zero times. Find a concrete alternative.
-- "in conclusion": banned entirely.
-
+${connectorLimits}
 FORBIDDEN PATTERNS — these are AI tells, do not produce them:
 - Over-clean paragraph transitions that editorially summarize the previous point ("Having established X, we can now turn to Y...").
 - Back-to-back sentences that are equally smooth and balanced — real writing has uneven texture.
@@ -211,9 +246,32 @@ ${text}`;
 // ─── Pass 3: Selective Mutation ──────────────────────────────────────────────
 // Only fires when the internal detector still scores the text as synthetic
 // after Passes 1 and 2. Surgical — targets specific statistical patterns.
-export function getMutationPrompt(text: string): string {
-  return `You are doing a final surgical pass on text that has already been edited twice. Most of it is now fine. Your job is narrow: identify and fix only the specific patterns that AI detectors flag.
+export function getMutationPrompt(text: string, register?: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
 
+  const registerLock = isFormal
+    ? `
+══════════════════════════════════════════════
+REGISTER LOCK: Source text is ${register}. Do NOT add contractions, casual phrasing,
+colloquialisms, or informal language of any kind. Preserve formal vocabulary throughout.
+Formal connectors (furthermore, consequently, nevertheless) are CORRECT in this register —
+do not remove them unless they appear 3+ times. Do not roughen or casualize the tone.
+══════════════════════════════════════════════
+`
+    : "";
+
+  const connectorRule = isFormal
+    ? `2. CONNECTOR OVERUSE (formal register)
+   Same formal connector appearing 3+ times (e.g. "furthermore" used four times).
+   Fix: Replace the excess occurrences with synonyms. Do NOT remove them all — formal
+   connectors are appropriate and expected in academic/formal writing.`
+    : `2. CONNECTOR OVERUSE
+   "however", "therefore", "moreover", "furthermore", "additionally", "consequently"
+   appearing more than once total across the section.
+   Fix: Remove the excess ones or restructure the sentences so they're not needed.`;
+
+  return `You are doing a final surgical pass on text that has already been edited twice. Most of it is now fine. Your job is narrow: identify and fix only the specific patterns that AI detectors flag.
+${registerLock}
 TASK: Find and fix only the spots listed below. Do not touch anything that already reads naturally.
 
 WHAT AI DETECTORS MEASURE — fix any of these that remain:
@@ -222,10 +280,7 @@ WHAT AI DETECTORS MEASURE — fix any of these that remain:
    All sentences in a paragraph are similar lengths (e.g. 18, 20, 22, 19 words).
    Fix: Break one or two sentences dramatically shorter or longer to widen the variance.
 
-2. CONNECTOR OVERUSE
-   "however", "therefore", "moreover", "furthermore", "additionally", "consequently"
-   appearing more than once total across the section.
-   Fix: Remove the excess ones or restructure the sentences so they're not needed.
+${connectorRule}
 
 3. CONSECUTIVE SAME OPENERS
    Two or more sentences in a row starting with the same word.

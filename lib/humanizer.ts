@@ -380,7 +380,8 @@ async function semanticPass(
 // paragraph variance that makes longer text pass ZeroGPT's perplexity check.
 async function mutationPass(
   text: string,
-  mode: HumanizeMode
+  mode: HumanizeMode,
+  register: SourceRegister = "neutral"
 ): Promise<string> {
   if (mode === "light") return text;
 
@@ -394,7 +395,7 @@ async function mutationPass(
   // and won't be fooled by surface-level passes alone on short text)
   if (!isShort && score <= threshold) return text;
 
-  return callModel(getMutationPrompt(text), MUTATION_SETTINGS);
+  return callModel(getMutationPrompt(text, register), MUTATION_SETTINGS);
 }
 
 // ─── Short-Text Perplexity Hardening ────────────────────────────────────────
@@ -465,7 +466,8 @@ ${text}`;
 
 async function firstParagraphHardening(
   text: string,
-  mode: HumanizeMode
+  mode: HumanizeMode,
+  register: SourceRegister = "neutral"
 ): Promise<string> {
   if (mode === "light") return text;
 
@@ -479,14 +481,32 @@ async function firstParagraphHardening(
   const threshold = mode === "aggressive" ? 35 : 45;
   if (score <= threshold) return text;
 
+  const isFormal = register === "academic" || register === "formal";
+
+  const registerLock = isFormal
+    ? `
+REGISTER LOCK: Source text is ${register}. FORBIDDEN: contractions, casual language,
+informal phrasing, colloquialisms. Formal connectors (however, therefore) are CORRECT
+here — do not strip them. Keep all academic vocabulary intact.
+`
+    : "";
+
+  const connectorInstruction = isFormal
+    ? `- If the same formal connector appears twice in a row, replace one with a synonym.`
+    : `- If any formal connector appears (however/therefore/moreover), replace or remove it.`;
+
+  const endingInstruction = isFormal
+    ? `- If the paragraph ends with a hedged or uncertain statement, that is fine — leave it.`
+    : `- If the paragraph ends with a tidy summary sentence, make it end more abruptly.`;
+
   // Extra mutation specifically for the first paragraph
   const prompt = `You are doing a final cleanup pass on the OPENING PARAGRAPH only of a piece of writing. This paragraph needs to read as clearly human-written because it gets the most scrutiny.
-
+${registerLock}
 TASK: Rewrite only to fix these specific issues:
 - If two consecutive sentences start the same way, fix one opener.
 - If all sentences are similar lengths, make one noticeably shorter or longer.
-- If any formal connector appears (however/therefore/moreover), replace or remove it.
-- If the paragraph ends with a tidy summary sentence, make it end more abruptly.
+${connectorInstruction}
+${endingInstruction}
 
 Do NOT restructure the paragraph. Do NOT change meaning. Fix only what is listed above.
 
@@ -3199,13 +3219,13 @@ export async function humanize(
   const merged = semantic.join("\n\n");
 
   // Pass 3: Targeted mutation on full merged text (gated by score)
-  const mutated = await mutationPass(merged, mode);
+  const mutated = await mutationPass(merged, mode, register);
 
   // Pass 3a: Short-text perplexity hardening (LLM call, only fires for <120 word texts)
   const shortHardened = await shortTextPerplexityHardening(mutated, mode, register);
 
   // Pass 3b: First-paragraph hardening (extra mutation if opener still scores high)
-  const hardened = await firstParagraphHardening(shortHardened, mode);
+  const hardened = await firstParagraphHardening(shortHardened, mode, register);
 
   // Pass 4: Deterministic anti-pattern cleanup (no LLM call)
   const cleaned = antiPatternPass(hardened, register);
