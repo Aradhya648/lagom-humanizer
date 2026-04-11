@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import ScorePill from "@/components/ScorePill";
-import ModeSelector, { Mode } from "@/components/ModeSelector";
+import ContentTypeSelector, { ContentType } from "@/components/ContentTypeSelector";
 import WordReveal from "@/components/WordReveal";
 import Spinner from "@/components/Spinner";
 import { detectAI, DetectionResult } from "@/lib/detector";
@@ -16,7 +16,7 @@ function countWords(text: string): number {
 export default function Home() {
   const [inputText, setInputText] = useState("");
   const [outputText, setOutputText] = useState("");
-  const [mode, setMode] = useState<Mode>("medium");
+  const [contentType, setContentType] = useState<ContentType>("general");
   const [wordLimit, setWordLimit] = useState(1000);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export default function Home() {
       const res = await fetch("/api/humanize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: inputText, mode, wordLimit }),
+        body: JSON.stringify({ text: inputText, contentType, wordLimit }),
       });
 
       const data = await res.json();
@@ -75,7 +75,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [inputText, mode, wordLimit, loading]);
+  }, [inputText, contentType, wordLimit, loading]);
 
   const handleCopy = useCallback(async () => {
     if (!outputText) return;
@@ -106,7 +106,6 @@ export default function Home() {
             </span>
           </div>
           <div className="flex items-center gap-4 text-xs text-muted">
-            <span className="hidden sm:inline">Gemini 2.5 Flash · Free tier</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Live
@@ -120,7 +119,7 @@ export default function Home() {
         {/* Controls Bar */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6">
           <div className="w-full sm:w-auto sm:min-w-72">
-            <ModeSelector value={mode} onChange={setMode} />
+            <ContentTypeSelector value={contentType} onChange={setContentType} />
           </div>
           <div className="flex items-center gap-3 flex-1">
             <span className="text-xs text-muted whitespace-nowrap">
@@ -246,7 +245,7 @@ export default function Home() {
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="flex flex-col items-center gap-3 text-muted">
                     <Spinner size={24} />
-                    <span className="text-xs">Rewriting in {mode} mode...</span>
+                    <span className="text-xs">Rewriting as {contentType}...</span>
                   </div>
                 </div>
               )}
@@ -291,7 +290,7 @@ export default function Home() {
             {" · "}Built for writers, not robots
           </span>
           <span className="text-xs text-muted/40">
-            Powered by Gemini 2.5 Flash
+            Free to use
           </span>
         </div>
       </footer>

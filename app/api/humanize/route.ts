@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { humanize, HumanizeMode } from "@/lib/humanizer";
+import { humanize } from "@/lib/humanizer";
 import { detectAI } from "@/lib/detector";
+import { type ContentType } from "@/prompts/pipeline";
 
-// Increase serverless function timeout for multi-pass aggressive mode.
-// Vercel Pro/Enterprise honours this; Hobby plan caps at 10s regardless.
-export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { text, mode, wordLimit } = body as {
+    const { text, contentType, wordLimit } = body as {
       text: unknown;
-      mode: unknown;
+      contentType: unknown;
       wordLimit: unknown;
     };
 
@@ -23,11 +21,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate mode
-    const validModes: HumanizeMode[] = ["light", "medium", "aggressive"];
-    if (!validModes.includes(mode as HumanizeMode)) {
+    // Validate contentType
+    const validTypes: ContentType[] = ["essay", "academic", "email", "document", "general"];
+    if (!validTypes.includes(contentType as ContentType)) {
       return NextResponse.json(
-        { error: 'mode must be one of: light, medium, aggressive' },
+        { error: "contentType must be one of: essay, academic, email, document, general" },
         { status: 400 }
       );
     }
@@ -51,7 +49,7 @@ export async function POST(req: NextRequest) {
     const originalResult = detectAI(text);
 
     // Humanize
-    const humanizedText = await humanize(text, mode as HumanizeMode, limit);
+    const humanizedText = await humanize(text, contentType as ContentType, limit);
 
     // Score humanized
     const humanizedResult = detectAI(humanizedText);

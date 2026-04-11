@@ -1,312 +1,217 @@
-export type HumanizeMode = "light" | "medium" | "aggressive";
+export type ContentType = "essay" | "academic" | "email" | "document" | "general";
+
+// Kept for backward compatibility — currently imported by lib/humanizer.ts.
+// Remove when humanizer.ts is updated to use ContentType.
 export type SourceRegister = "academic" | "formal" | "neutral" | "informal";
 
-// ─── Per-chunk variation hints ───────────────────────────────────────────────
-// Applied by chunk index so adjacent chunks receive different micro-instructions.
-// This introduces natural local inconsistency across the document.
+// ─── Chunk Variation Hints ────────────────────────────────────────────────────
+// Cycled by chunkIndex % 5 inside getStructuralPrompt.
 
-const STRUCTURAL_HINTS = [
-  "Open this section with a short, direct sentence.",
-  "Let this section have at least one noticeably long sentence.",
-  "Keep this section punchy — shorter sentences suit this part.",
-  "This section can flow freely — longer sentences are fine here.",
-  "Vary the rhythm here more than the surrounding sections.",
-  "Make the first and last sentence of this section feel rhythmically different.",
+const CHUNK_HINTS = [
+  "Open with a short direct sentence under 10 words.",
+  "Let one sentence in this section run long — over 28 words.",
+  "Keep this section punchy. Shorter sentences throughout.",
+  "Vary the first word of every sentence — no two the same.",
+  "Make the last sentence of this section shorter than the rest.",
 ];
 
-const SEMANTIC_HINTS = [
-  "The opening can be a touch more direct than usual.",
-  "Concrete, specific language fits this section better than abstract phrasing.",
-  "A slightly more relaxed turn of phrase is appropriate here.",
-  "Keep this section crisp. No hedging, no softening.",
-  "This section can be slightly more reflective in tone.",
-  "The language here should feel natural and unpolished — not optimized.",
-];
+// ─── Pass 1: Structural Rewrite ───────────────────────────────────────────────
 
-// ─── Pass 1: Structural Rewrite ──────────────────────────────────────────────
-// Single responsibility: sentence rhythm and syntax only.
-// Does NOT touch word choices, phrases, or meaning.
 export function getStructuralPrompt(
   text: string,
-  mode: HumanizeMode,
-  chunkIndex?: number,
-  annotatedText?: string,
-  register?: SourceRegister
+  contentType: ContentType,
+  chunkIndex: number
 ): string {
-  const isFormal = register === "academic" || register === "formal";
+  const hint = CHUNK_HINTS[chunkIndex % 5];
 
-  const scope: Record<HumanizeMode, string> = {
-    light:
-      "Minimal — find 2-3 sentences that are rhythmically identical to their neighbors and fix only those. Leave everything else alone.",
-    medium:
-      "Moderate — vary sentence lengths across the whole section. Aim for a clear mix: some under 12 words, some over 25. Break the uniform medium-length pattern.",
-    aggressive:
-      "Aggressive — no two consecutive sentences should share the same rhythmic shape (similar word count + similar structure). Vary every sentence against its neighbor.",
+  const contentBehavior: Record<ContentType, string> = {
+    essay: `CONTENT TYPE: Academic Essay
+Vary clause weight within sentences. Long subordinate clauses
+and semicolons are correct. Do NOT fragment formal sentences.
+Do NOT add contractions. Preserve academic register.`,
+
+    academic: `CONTENT TYPE: Academic Writing
+Vary clause weight within sentences. Long subordinate clauses
+and semicolons are correct. Do NOT fragment formal sentences.
+Do NOT add contractions. Preserve academic register.`,
+
+    email: `CONTENT TYPE: Email
+Mix short punchy sentences (under 10 words) with longer ones
+(20+ words). Natural conversational rhythm.`,
+
+    document: `CONTENT TYPE: Formal Document
+Vary paragraph density. Sentence lengths should vary while
+remaining professional.`,
+
+    general: `CONTENT TYPE: General Writing
+MANDATORY: Every paragraph MUST contain at least one sentence
+under 10 words AND at least one sentence over 22 words.
+Reorder clauses aggressively. Split long uniform sentences.
+Merge short choppy ones. No two consecutive sentences can
+have word counts within 3 of each other.`,
   };
 
-  const hint =
-    chunkIndex !== undefined
-      ? `\nSECTION FOCUS: ${STRUCTURAL_HINTS[chunkIndex % STRUCTURAL_HINTS.length]}`
-      : "";
+  return `You are rewriting text to break AI detection patterns.
+Your ONLY job is changing sentence structure and rhythm —
+not word choices.
 
-  const classificationBlock = annotatedText
-    ? `
-SENTENCE CLASSIFICATION (follow these rewrite intensities):
-Each sentence is tagged [A], [B], or [C]:
-  [A] = Plain factual — leave nearly untouched. Only fix if structurally identical to neighbor.
-  [B] = Medium synthetic — moderate restructuring allowed.
-  [C] = High-risk synthetic — full restructuring required.
-Not every sentence should feel rewritten. Preserve [A] sentences almost exactly.
+${contentBehavior[contentType]}
 
-`
-    : "";
+SECTION FOCUS: ${hint}
 
-  const registerBlock = isFormal
-    ? `
-REGISTER CONSTRAINT: The source text is ${register}. Preserve complex sentence architecture — do NOT over-fragment long formal sentences into short choppy ones. Long subordinate clauses, semicolons, and multi-clause constructions are appropriate here. Break rhythm by varying clause weight, not by chopping sentences into fragments.
-`
-    : "";
+MANDATORY STRUCTURAL CHANGES — you MUST do ALL of these:
+1. Identify the longest sentence and split it into two at a
+   natural break point.
+2. Identify two consecutive sentences with similar lengths
+   and make one significantly shorter (cut it by half) or
+   significantly longer (add a dependent clause).
+3. Change the opening word of at least 3 sentences so no
+   two consecutive sentences start with the same word.
+4. If any paragraph has 4+ sentences all between 15-25 words,
+   rewrite one to be under 10 words and one to be over 28.
+5. Convert at least one compound sentence joined by "and"
+   into two separate sentences, or vice versa.
 
-  const textToUse = annotatedText ?? text;
+FORBIDDEN:
+- Two consecutive sentences with word counts within 3 of each other
+- Three sentences starting with the same word
+- Keeping paragraph structure identical to input
 
-  return `You are a structural copy editor. Your only task is sentence rhythm and syntax. Do not touch word choices, phrases, or meaning.
-
-TASK: Restructure the sentences below so they no longer sound uniform and machine-generated.
-
-SCOPE: ${scope[mode]}${hint}
-${registerBlock}${classificationBlock}WHAT TO DO:
-- Vary sentence lengths drastically. AI writes all sentences at similar word counts. Break that — some sentences should be short (under 12 words), some long (25+).
-- Split compound sentences that chain parallel clauses: "X does A, Y does B, and Z does C" — split or restructure these.
-- Merge short choppy sentences that belong together into one longer flowing sentence.
-- Vary sentence-opening structure. Never start two consecutive sentences with the same word or the same grammatical pattern (Subject-Verb, Subject-Verb, Subject-Verb is a red flag).
-- If multiple paragraphs are the same visual weight, redistribute — make some dense, some light.
-
-FORBIDDEN PATTERNS (these are AI tells — do not produce them):
-- Two consecutive sentences with similar word counts (e.g. 22 words, then 21 words, then 23 words).
-- Parallel list-like sentence triplets: "First, X. Second, Y. Third, Z."
-- Compound sentences with symmetric halves: "While A does X, B does Y."
-- Paragraphs where every sentence follows Subject + Verb + Object structure.
-- Identical or near-identical sentence rhythms across an entire paragraph.
-
-WHAT NOT TO DO:
-- Do not change any vocabulary, word choices, or phrases unless structurally forced.
-- Do not replace expressions, idioms, or terminology.
-- Do not alter facts, arguments, or meaning in any way.
-- Do not add ideas or remove ideas.
-
-OUTPUT:
-- Output only the rewritten text. No preamble, no labels, no meta-commentary.
-- Remove all [A], [B], [C] tags from the output — they are instructions only.
-- STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate. Do not pad. Do not expand.
-- Preserve all paragraph breaks exactly.
-
-TEXT:
-${textToUse}`;
-}
-
-// ─── Pass 2: Semantic Naturalness ────────────────────────────────────────────
-// Runs after structure is fixed. Single responsibility: word choices + voice.
-// Must NOT restructure sentences — rhythm is already set by Pass 1.
-export function getSemanticPrompt(
-  text: string,
-  mode: HumanizeMode,
-  chunkIndex?: number,
-  register?: SourceRegister
-): string {
-  const isFormal = register === "academic" || register === "formal";
-
-  const depthMap: Record<HumanizeMode, string> = {
-    light: `- Replace any obvious AI filler phrases from the list below with plain natural alternatives.
-- Make one or two word-choice improvements that sound more like a person wrote them.
-- Keep the professional tone intact.`,
-
-    medium: isFormal
-      ? `- Replace all AI filler phrases from the list below.
-- Do NOT add contractions — the source text is formal/academic and must stay that way.
-- Replace abstract or vague phrases with concrete, specific language.
-- Add one or two connective phrases a real writer would reach for — not a machine.
-- Keep the formal register intact. Do not informalize.`
-      : `- Replace all AI filler phrases from the list below.
-- Use contractions occasionally where they sound natural (it's, that's, don't, they're).
-- Replace abstract or vague phrases with concrete, specific language.
-- Add one or two connective phrases a real writer would reach for — not a machine.
-- Allow mild imperfection: a slightly informal turn of phrase is better than a perfectly smooth one that reads like it was generated.
-- Keep the register professional overall. Do not over-informalize.`,
-
-    aggressive: isFormal
-      ? `- Replace every AI filler phrase and formal connector from the list below.
-- Do NOT add contractions or casual language — the source text is formal/academic and must stay that way.
-- Replace vague generalities with direct, specific, grounded language.
-- Introduce natural imperfection through varied sentence rhythm and precise word choices — not through casualness.
-- The writing should feel like a knowledgeable person wrote it carefully — not generated, but also not roughened into a different register.
-- Do NOT roughen academic tone. Preserve the source register.`
-      : `- Replace every AI filler phrase and formal connector from the list below.
-- Use contractions freely where natural.
-- Replace vague generalities with direct, specific, grounded language.
-- Introduce natural imperfection: an occasional slight awkwardness, a compressed aside, a thought that ends a touch abruptly. Real writers do this. Machines don't.
-- Where a sentence is over-polished or sounds editorial, roughen it slightly.
-- The writing should feel like someone who knows their subject sat down and wrote — not optimized, not neutral, not symmetric.
-- Occasional abruptness is fine. A short blunt sentence after a long one is human.`,
-  };
-
-  const hint =
-    chunkIndex !== undefined
-      ? `\nSECTION FOCUS: ${SEMANTIC_HINTS[chunkIndex % SEMANTIC_HINTS.length]}`
-      : "";
-
-  // Register ceiling — for formal/academic text this is the FIRST thing the LLM sees.
-  // It must override all other instructions. Listed explicitly with forbidden examples.
-  const registerCeiling = isFormal
-    ? `
-══════════════════════════════════════════════
-REGISTER LOCK — THIS OVERRIDES ALL OTHER INSTRUCTIONS
-The source text is ${register ?? "formal"}. You are NOT permitted to change the register.
-
-ABSOLUTELY FORBIDDEN — do not produce any of these under any circumstance:
-- Contractions of any kind: it's, we've, they're, isn't, don't, aren't, can't, won't, etc.
-- Casual openers: "Honestly,", "Look,", "And honestly,", "I mean,", "Think about it,"
-- Colloquial phrases: "not by a long shot", "absolutely everywhere", "a whole lot"
-- Direct address to the reader: "think about it", "you know", "right?"
-- Informal intensifiers: "really", "truly", "absolutely" used as fillers
-- Emphasis via asterisks or italics (*word*)
-- Exclamatory or rhetorical questions as rhetorical devices
-- Fragmented speech or trailing punctuation (... for effect)
-- Conversational bridges: "And that's", "So what does this mean?", "Here's the thing:"
-
-WHAT THIS REGISTER REQUIRES:
-- Complete formal sentences with academic vocabulary
-- Third-person or passive voice where appropriate
-- Precise technical terminology preserved exactly as given
-- Complex subordinate clauses are CORRECT here — do not simplify them
-══════════════════════════════════════════════
-`
-    : "";
-
-  const connectorLimits = isFormal
-    ? `
-CONNECTOR WORD LIMITS (formal text may use these but not over-repeat):
-- "however": at most twice. Use "yet" or "though" as alternatives.
-- "therefore" / "thus": at most once each.
-- "furthermore" / "moreover": permitted — they are correct in formal register. Limit to 2 total.
-- "consequently" / "accordingly": permitted. Limit to 1 each.
-- "in conclusion": banned entirely — use "taken together," or "this evidence suggests".
-`
-    : `
-HARD LIMITS ON CONNECTOR WORDS (overuse is a primary AI detector signal):
-- "however": use at most once in the entire section. Zero is fine.
-- "therefore": use at most once. Prefer "so" or restructure the sentence.
-- "moreover": use zero times. Find a concrete alternative.
-- "furthermore": use zero times. Find a concrete alternative.
-- "additionally": use zero times. Find a concrete alternative.
-- "consequently": use zero times. Find a concrete alternative.
-- "in conclusion": banned entirely.
-`;
-
-  return `You are a human editor focused on voice and word choice. Sentence structure has been set by a previous editor — do not change sentence boundaries or restructure syntax.
-${registerCeiling}
-TASK: Make this text read like a real person wrote it. Focus only on word choices, transitions, and voice.${hint}
-
-WHAT TO DO:
-${depthMap[mode]}
-
-BANNED PHRASES — remove or rewrite every instance that appears:
-"it is important to note" | "it is worth noting" | "it is worth mentioning"
-"it is crucial" | "it is essential" | "it is imperative" | "it should be noted"
-"in conclusion" | "in summary" | "to summarize" | "this essay will"
-"delve into" | "in today's world" | "in this day and age"
-"plays a crucial role" | "plays a vital role"
-"in the realm of" | "in the field of"
-"as previously mentioned" | "as mentioned above"
-"it can be argued" | "it is undeniable" | "it is clear that" | "it is evident that"
-"needless to say" | "it goes without saying"
-"in light of" | "taking into account" | "with regards to"
-${connectorLimits}
-FORBIDDEN PATTERNS — these are AI tells, do not produce them:
-- Over-clean paragraph transitions that editorially summarize the previous point ("Having established X, we can now turn to Y...").
-- Back-to-back sentences that are equally smooth and balanced — real writing has uneven texture.
-- Pairs of sentences where the second perfectly mirrors the first in structure.
-- Ending a section with a tidy wrap-up sentence that restates the main point.
-
-WHAT NOT TO DO:
-- Do not restructure sentences, split them, or merge them.
-- Do not change argument order or paragraph structure.
-- Do not add ideas or remove ideas.
-- Do not make technical or professional content overly casual.
-- Do not over-rewrite — this is refinement, not replacement.
-
-OUTPUT:
-- Output only the rewritten text. No preamble, no labels, no explanation.
-- STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate or pad with filler.
-- Preserve all paragraph breaks exactly.
+DO NOT change vocabulary or meaning.
+Output only the rewritten text. No preamble.
+STRICT LENGTH: 90-110% of input word count.
+Preserve paragraph breaks.
 
 TEXT:
 ${text}`;
 }
 
-// ─── Pass 3: Selective Mutation ──────────────────────────────────────────────
-// Only fires when the internal detector still scores the text as synthetic
-// after Passes 1 and 2. Surgical — targets specific statistical patterns.
-export function getMutationPrompt(text: string, register?: SourceRegister): string {
-  const isFormal = register === "academic" || register === "formal";
+// ─── Pass 2: Semantic Naturalness ─────────────────────────────────────────────
 
-  const registerLock = isFormal
-    ? `
-══════════════════════════════════════════════
-REGISTER LOCK: Source text is ${register}. Do NOT add contractions, casual phrasing,
-colloquialisms, or informal language of any kind. Preserve formal vocabulary throughout.
-Formal connectors (furthermore, consequently, nevertheless) are CORRECT in this register —
-do not remove them unless they appear 3+ times. Do not roughen or casualize the tone.
-══════════════════════════════════════════════
-`
-    : "";
+export function getSemanticPrompt(
+  text: string,
+  contentType: ContentType,
+  chunkIndex: number
+): string {
+  void chunkIndex;
 
-  const connectorRule = isFormal
-    ? `2. CONNECTOR OVERUSE (formal register)
-   Same formal connector appearing 3+ times (e.g. "furthermore" used four times).
-   Fix: Replace the excess occurrences with synonyms. Do NOT remove them all — formal
-   connectors are appropriate and expected in academic/formal writing.`
-    : `2. CONNECTOR OVERUSE
-   "however", "therefore", "moreover", "furthermore", "additionally", "consequently"
-   appearing more than once total across the section.
-   Fix: Remove the excess ones or restructure the sentences so they're not needed.`;
+  const isFormal = contentType === "essay" || contentType === "academic";
 
-  return `You are doing a final surgical pass on text that has already been edited twice. Most of it is now fine. Your job is narrow: identify and fix only the specific patterns that AI detectors flag.
+  const registerBlock = isFormal ? `
+REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS
+Formal academic text. FORBIDDEN: contractions, casual language,
+colloquialisms. Formal connectors (however, therefore) are
+correct here — limit to 2 each max.
+` : "";
+
+  const voiceMap: Record<ContentType, string> = {
+    essay: `Formal academic voice. Replace AI filler phrases with
+precise academic alternatives. Keep all technical vocabulary.`,
+
+    academic: `Formal academic voice. Replace AI filler phrases with
+precise academic alternatives. Keep all technical vocabulary.`,
+
+    email: `Warm professional voice. Use contractions freely.
+Sound like a real person, not a template.`,
+
+    document: `Formal precise voice. No contractions. Replace vague
+phrases with specific grounded language.`,
+
+    general: `Natural educated voice. You MUST make these changes:
+1. Replace at least 3 formal/stiff phrases with conversational
+   equivalents (e.g. "individuals" → "people", "utilize" → "use",
+   "subsequently" → "then", "endeavor" → "try").
+2. Add one contraction somewhere natural (it's, that's, don't,
+   they're, we've).
+3. Replace one abstract claim with a more concrete/specific version.
+4. If any sentence starts with "The" or "This", change at least
+   one of them to start differently.
+5. Make one sentence noticeably more direct — remove hedging
+   language like "tend to", "often appear to", "seems to".`,
+  };
+
+  return `You are a human editor fixing word choices and voice only.
+Do NOT restructure sentences. Do NOT split or merge.
+${registerBlock}
+VOICE INSTRUCTIONS:
+${voiceMap[contentType]}
+
+BANNED PHRASES — replace every instance:
+"it is important to note" | "it is worth noting"
+"it is worth mentioning" | "it should be noted"
+"in conclusion" | "in summary" | "to summarize"
+"this essay will" | "as an AI language model"
+"in today's fast-paced world" | "first and foremost"
+"last but not least" | "all in all" | "in a nutshell"
+"it goes without saying" | "needless to say"
+"a multitude of" | "a plethora of"
+"in today's world" | "a testament to"
+"at its core" | "it is no secret that"
+"with that being said" | "that being said"
+
+CONNECTOR LIMITS:
+- "however": max 1 per section
+- "therefore": max 1 per section
+- "moreover" / "furthermore" / "additionally": 0 — remove
+
+DO NOT restructure, split, or merge sentences.
+DO NOT remove or change technical vocabulary.
+Output only rewritten text. No preamble.
+STRICT LENGTH: 90-110% of input word count.
+Preserve paragraph breaks.
+
+TEXT:
+${text}`;
+}
+
+// ─── Pass 3: Selective Mutation ───────────────────────────────────────────────
+
+export function getMutationPrompt(
+  text: string,
+  contentType: ContentType
+): string {
+  const isFormal = contentType === "essay" || contentType === "academic";
+
+  const registerLock = isFormal ? `
+REGISTER LOCK: Formal academic text.
+No contractions. No casual language. Preserve formal vocabulary.
+` : "";
+
+  return `Final surgical pass. Fix ONLY these patterns if present.
+Do not touch anything already reading naturally.
 ${registerLock}
-TASK: Find and fix only the spots listed below. Do not touch anything that already reads naturally.
 
-WHAT AI DETECTORS MEASURE — fix any of these that remain:
+FIX THESE IF PRESENT:
 
-1. SENTENCE LENGTH UNIFORMITY
-   All sentences in a paragraph are similar lengths (e.g. 18, 20, 22, 19 words).
-   Fix: Break one or two sentences dramatically shorter or longer to widen the variance.
+1. UNIFORM SENTENCE LENGTHS
+   Find any paragraph where all sentences are within 5 words
+   of each other. Fix by cutting one sentence to under 10 words.
 
-${connectorRule}
+2. REPEATED OPENERS
+   Find two consecutive sentences starting with the same word.
+   Change the opener of the second one.
 
-3. CONSECUTIVE SAME OPENERS
-   Two or more sentences in a row starting with the same word.
-   Fix: Reopen one of them differently.
+3. OVERUSED CONNECTORS
+   "however", "therefore", "moreover", "furthermore" appearing
+   more than once in a paragraph. Remove the extra occurrence.
 
-4. OVER-SMOOTH PARAGRAPH STITCHING
-   A transition sentence between paragraphs that feels editorial — like a narrator
-   stitching sections together rather than a writer continuing a thought.
-   Fix: Remove or rough it up. An abrupt paragraph start is more human.
+4. PREDICTABLE SENTENCE ENDINGS
+   Sentences ending with tidy wrap-up clauses like
+   "...which ultimately leads to better outcomes" or
+   "...making it essential for success."
+   Cut these trailing clauses. End the sentence earlier.
 
-5. CLAUSE LENGTH UNIFORMITY
-   Comma-separated clauses that are all similar lengths inside sentences.
-   Fix: Break the symmetry — make one clause very short, another very long.
+5. ZOMBIE NOUNS
+   Convert one nominalization back to a verb:
+   "make a decision" → "decide"
+   "have an understanding" → "understand"
+   "provide assistance" → "help"
+   "give consideration" → "consider"
+   "reach a conclusion" → "conclude"
 
-6. PARALLEL SENTENCE GROUPS
-   Two or three consecutive sentences that follow the exact same grammatical structure.
-   Fix: Restructure one of them so it breaks the pattern.
-
-HARD RULE:
-If a sentence already reads naturally, do not touch it. The goal is to fix statistical
-outliers, not to rewrite clean text. Leave good writing alone.
-
-OUTPUT:
-- Output only the final text. No preamble, no commentary, no labels.
-- STRICT LENGTH RULE: output must be 90%–110% of the input word count. Do not elaborate or pad with filler.
-- Preserve all paragraph breaks exactly.
+Output only the fixed text. No preamble.
+STRICT LENGTH: 90-110% of input word count.
+Preserve paragraph breaks.
 
 TEXT:
 ${text}`;
