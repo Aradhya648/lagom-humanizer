@@ -256,8 +256,6 @@ async function callGemini(prompt: string, settings: GenSettings): Promise<string
       temperature: settings.temperature,
       topP: settings.topP,
       topK: settings.topK,
-      frequencyPenalty: settings.frequencyPenalty,
-      presencePenalty: settings.presencePenalty,
       maxOutputTokens: 4096,
     },
   });
