@@ -17,6 +17,11 @@ const FORMAL_MARKERS = /\b(therefore|however|nevertheless|regarding|pertaining|r
 const INFORMAL_MARKERS = /\b(gonna|wanna|gotta|kinda|sorta|yeah|nah|okay|ok|hey|yep|nope|stuff|thing is|you know|I mean|right\?|honestly)\b/i;
 const CONTRACTION_RE = /\b(I'm|you're|we're|they're|isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|wouldn't|can't|couldn't|shouldn't|it's|that's|there's|here's|what's|who's|let's|I've|you've|we've|they've|I'll|you'll|we'll|they'll|I'd|you'd|we'd|they'd)\b/gi;
 
+// Passive voice is a strong formal signal even without trigger words
+const PASSIVE_VOICE_RE = /\b(is|are|was|were|be|been|being)\s+\w+ed\b/gi;
+// Third-person impersonal constructions — formal writing pattern
+const THIRD_PERSON_RE = /\b(one|a person|people|individuals|researchers|scholars|the author|the study|the data)\b/gi;
+
 export function classifyRegister(text: string): SourceRegister {
   const words = text.split(/\s+/).length;
   const sentences = text.split(/(?<=[.!?])\s+/).length;
@@ -27,14 +32,28 @@ export function classifyRegister(text: string): SourceRegister {
   const informalHits = (text.match(INFORMAL_MARKERS) || []).length;
   const contractionCount = (text.match(CONTRACTION_RE) || []).length;
   const contractionDensity = contractionCount / Math.max(words, 1) * 100;
+  const passiveCount = (text.match(PASSIVE_VOICE_RE) || []).length;
+  const passiveDensity = passiveCount / Math.max(sentences, 1);
+  const thirdPersonHits = (text.match(THIRD_PERSON_RE) || []).length;
 
   if (contractionDensity > 2.5 || informalHits >= 3) return "informal";
   if (informalHits >= 2 && contractionDensity > 1.5) return "informal";
+
   if (academicHits >= 2) return "academic";
   if (academicHits >= 1 && avgSentLen > 22) return "academic";
   if (formalHits >= 3 && avgSentLen > 20) return "academic";
+
   if (formalHits >= 2 && contractionDensity < 1) return "formal";
   if (avgSentLen > 20 && contractionDensity < 0.5) return "formal";
+
+  // Catch formal text that uses no trigger words:
+  // Zero contractions + passive voice + third-person impersonal = formal writing
+  if (contractionDensity === 0 && passiveDensity >= 0.3 && thirdPersonHits >= 2) return "formal";
+  // Zero contractions + long sentences + third-person = formal
+  if (contractionDensity === 0 && avgSentLen >= 16 && thirdPersonHits >= 3) return "formal";
+  // Zero contractions + long sentences, no informal markers = at least formal
+  if (contractionDensity === 0 && informalHits === 0 && avgSentLen >= 18) return "formal";
+
   return "neutral";
 }
 
@@ -301,6 +320,329 @@ function rhetoricalSuppressionPass(text: string): string {
   return result;
 }
 
+// ─── Perplexity Injector ─────────────────────────────────────────────────────
+// ZeroGPT is perplexity-based. Swaps up to 3 common words per paragraph with
+// lower-frequency synonyms from a curated pool to raise per-token surprise.
+// Register-gated: formalSafe pool for academic/formal, full pool otherwise.
+
+interface SynonymSwap { word: string; replacements: string[]; formalSafe: boolean; }
+
+const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
+  { word: "shows",     replacements: ["illustrates", "reveals", "makes clear"],           formalSafe: true  },
+  { word: "show",      replacements: ["illustrate", "reveal", "make clear"],              formalSafe: true  },
+  { word: "shown",     replacements: ["illustrated", "borne out", "corroborated"],        formalSafe: true  },
+  { word: "uses",      replacements: ["employs", "draws on", "leverages"],                formalSafe: true  },
+  { word: "use",       replacements: ["employ", "draw on", "leverage"],                   formalSafe: true  },
+  { word: "highlight", replacements: ["underscore", "foreground", "bring into focus"],    formalSafe: true  },
+  { word: "suggest",   replacements: ["intimate", "point toward", "hint at"],             formalSafe: true  },
+  { word: "indicate",  replacements: ["signal", "attest to", "speak to"],                 formalSafe: true  },
+  { word: "examine",   replacements: ["interrogate", "probe", "unpack"],                  formalSafe: true  },
+  { word: "improve",   replacements: ["sharpen", "bolster", "refine"],                    formalSafe: true  },
+  { word: "increase",  replacements: ["amplify", "heighten", "compound"],                 formalSafe: true  },
+  { word: "reduce",    replacements: ["attenuate", "curtail", "pare down"],               formalSafe: true  },
+  { word: "address",   replacements: ["contend with", "grapple with", "take up"],         formalSafe: true  },
+  { word: "many",      replacements: ["numerous", "an array of", "a range of"],           formalSafe: true  },
+  { word: "important", replacements: ["consequential", "pivotal", "weighty"],             formalSafe: true  },
+  { word: "different", replacements: ["distinct", "divergent", "varying"],                formalSafe: true  },
+  { word: "complex",   replacements: ["multifaceted", "intricate", "layered"],            formalSafe: true  },
+  { word: "clear",     replacements: ["apparent", "discernible", "evident"],              formalSafe: true  },
+  { word: "often",     replacements: ["frequently", "in many cases", "not infrequently"], formalSafe: true  },
+  { word: "also",      replacements: ["too", "as well", "equally"],                       formalSafe: true  },
+  { word: "very",      replacements: ["considerably", "markedly", "rather"],              formalSafe: true  },
+  { word: "because",   replacements: ["given that", "insofar as", "since"],               formalSafe: true  },
+  { word: "problem",   replacements: ["difficulty", "complication", "obstacle"],          formalSafe: true  },
+  { word: "question",  replacements: ["puzzle", "quandary", "matter"],                    formalSafe: true  },
+  { word: "approach",  replacements: ["tack", "avenue", "orientation"],                   formalSafe: true  },
+  { word: "get",       replacements: ["obtain", "acquire", "land"],                       formalSafe: false },
+  { word: "good",      replacements: ["solid", "worthwhile", "capable"],                  formalSafe: false },
+  { word: "big",       replacements: ["sizeable", "outsized", "substantial"],             formalSafe: false },
+  { word: "small",     replacements: ["slim", "modest", "narrow"],                        formalSafe: false },
+];
+
+function perplexityInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const pool = isFormal ? PERPLEXITY_SWAP_POOL.filter(s => s.formalSafe) : PERPLEXITY_SWAP_POOL;
+  return text.split(/\n\s*\n/).map((para) => {
+    let swapCount = 0;
+    let current = para;
+    for (const swap of pool) {
+      if (swapCount >= 3) break;
+      const re = new RegExp(`\\b${swap.word}\\b`, "i");
+      if (!re.test(current)) continue;
+      const idx = (current.length + swapCount) % swap.replacements.length;
+      const replacement = swap.replacements[idx];
+      current = current.replace(re, (m) =>
+        m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase()
+          ? replacement[0].toUpperCase() + replacement.slice(1) : replacement
+      );
+      swapCount++;
+    }
+    return current;
+  }).join("\n\n");
+}
+
+// ─── ZeroGPT N-gram Breaker ──────────────────────────────────────────────────
+// Replaces 30 common AI n-gram patterns that ZeroGPT is calibrated against.
+
+const ZEROGPT_NGRAMS: Array<[RegExp, string]> = [
+  [/\bin order to\b/gi, "to"],
+  [/\bas a result[,\s]/gi, "this led to "],
+  [/\bas a result of\b/gi, "because of"],
+  [/\bin the context of\b/gi, "within"],
+  [/\ba wide range of\b/gi, "various"],
+  [/\ba wide variety of\b/gi, "many kinds of"],
+  [/\bhas been shown to\b/gi, "appears to"],
+  [/\bhave been shown to\b/gi, "appear to"],
+  [/\bthere is a need to\b/gi, "we need to"],
+  [/\bthere is a need for\b/gi, "we need"],
+  [/\bin addition to\b/gi, "beyond"],
+  [/\bdue to the fact that\b/gi, "because"],
+  [/\bwith respect to\b/gi, "regarding"],
+  [/\bin terms of\b/gi, "for"],
+  [/\bat the same time[,]?\b/gi, "simultaneously"],
+  [/\bon the other hand[,]?\b/gi, "by contrast,"],
+  [/\bin recent years\b/gi, "recently"],
+  [/\bit is worth noting that\b/gi, "notably,"],
+  [/\bplays a significant role in\b/gi, "significantly affects"],
+  [/\bplays an important role in\b/gi, "significantly shapes"],
+  [/\bis designed to\b/gi, "aims to"],
+  [/\bit is important to\b/gi, "one must"],
+  [/\bin this regard[,]?\b/gi, "here,"],
+  [/\bto a certain extent\b/gi, "to some degree"],
+  [/\ba number of\b/gi, "several"],
+  [/\bon a regular basis\b/gi, "regularly"],
+  [/\bin the near future\b/gi, "soon"],
+  [/\btake into account\b/gi, "consider"],
+  [/\btaking into account\b/gi, "considering"],
+  [/\bserves as a\b/gi, "functions as a"],
+];
+
+function zeroGPTNgramBreaker(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of ZEROGPT_NGRAMS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+// ─── Structural Perplexity Injector ──────────────────────────────────────────
+// Injects structural surprises: parentheticals, em-dash list breaking,
+// semicolon splicing. Creates token-level unpredictability ZeroGPT can't predict.
+
+const FORMAL_PARENS = [
+  "(though this remains debated)", "(at least in the current literature)",
+  "(admittedly)", "(to varying degrees)", "(with some exceptions)",
+  "(broadly speaking)", "(in most formulations)", "(as one might expect)",
+];
+const CASUAL_PARENS = [
+  "(though not always)", "(at least in theory)", "(more or less)",
+  "(admittedly)", "(to some extent)", "(roughly speaking)", "(in most cases)",
+];
+const LIST_RE = /(\b\w+),\s+(\w+),?\s+and\s+(\w+)\b/;
+
+function structuralPerplexityInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const parens = isFormal ? FORMAL_PARENS : CASUAL_PARENS;
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalMods = 0;
+
+  const result = paragraphs.map((para, pIdx) => {
+    if (totalMods >= 5) return para;
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+    let paraModCount = 0;
+
+    const processed = sentences.map((sentence, sIdx) => {
+      if (paraModCount >= 2) return sentence;
+      const words = sentence.split(/\s+/).length;
+
+      // A: Parenthetical insertion after first comma in 18+ word sentences
+      if (words >= 18 && sIdx >= 1 && sIdx <= 2 && paraModCount === 0) {
+        const commaPos = sentence.indexOf(",");
+        if (commaPos > 10 && commaPos < sentence.length - 20) {
+          const paren = parens[(pIdx + sIdx + totalMods) % parens.length];
+          paraModCount++; totalMods++;
+          return `${sentence.slice(0, commaPos + 1)} ${paren}${sentence.slice(commaPos + 1)}`;
+        }
+      }
+
+      // B: Break "X, Y, and Z" list pattern
+      if (LIST_RE.test(sentence) && paraModCount < 2) {
+        const modified = sentence.replace(LIST_RE, (_, a, b, c) => `${a} and ${b} — along with ${c}`);
+        if (modified !== sentence) { paraModCount++; totalMods++; return modified; }
+      }
+
+      // C: Comma → semicolon in long sentences
+      if (words >= 20 && paraModCount < 2) {
+        const commas: number[] = [];
+        let pos = 0;
+        while ((pos = sentence.indexOf(",", pos)) !== -1) { commas.push(pos); pos++; }
+        if (commas.length >= 2) {
+          const mid = commas[Math.floor(commas.length / 2)];
+          if (mid > 15 && mid < sentence.length - 15) {
+            paraModCount++; totalMods++;
+            return `${sentence.slice(0, mid)};${sentence.slice(mid + 1)}`;
+          }
+        }
+      }
+
+      return sentence;
+    });
+
+    return processed.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// ─── Inter-Paragraph Divergence ──────────────────────────────────────────────
+// Swaps a repeated content word in adjacent paragraphs with a lateral synonym.
+// Targets Originality.ai's topic-uniformity signal.
+
+const DIVERGENCE_CLUSTERS: Record<string, string[]> = {
+  "approach": ["method","strategy","technique"], "method": ["approach","framework","procedure"],
+  "process": ["procedure","workflow","mechanism"], "system": ["framework","structure","model"],
+  "model": ["framework","paradigm","structure"], "result": ["outcome","finding","effect"],
+  "outcome": ["result","consequence","impact"], "impact": ["effect","influence","consequence"],
+  "role": ["function","purpose","contribution"], "factor": ["element","variable","component"],
+  "aspect": ["dimension","element","feature"], "issue": ["challenge","problem","concern"],
+  "challenge": ["difficulty","obstacle","issue"], "solution": ["answer","remedy","resolution"],
+  "context": ["setting","environment","situation"], "data": ["evidence","information","findings"],
+  "analysis": ["examination","assessment","evaluation"], "research": ["study","investigation","work"],
+  "study": ["research","investigation","analysis"], "level": ["degree","extent","rate"],
+  "case": ["instance","example","situation"], "example": ["case","instance","illustration"],
+  "area": ["domain","field","sector"], "field": ["area","domain","discipline"],
+};
+
+const DIV_STOP = new Set(["the","a","an","and","or","but","in","on","at","to","for","of","with","by",
+  "from","is","are","was","were","be","been","has","have","had","do","does","did","will","would",
+  "could","should","may","might","this","that","these","those","it","its","they","them","their",
+  "we","our","you","your","he","she","his","her","as","if","so","not","also","can","into"]);
+
+function interParagraphDivergencePass(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  if (paragraphs.length < 2) return text;
+  const paraWords = paragraphs.map(para =>
+    new Set(para.toLowerCase().replace(/[^a-z\s]/g,"").split(/\s+/).filter(w => w.length > 3 && !DIV_STOP.has(w)))
+  );
+  const result = paragraphs.map((para, i) => {
+    if (i === 0) return para;
+    const prevWords = paraWords[i - 1];
+    const words = para.split(/\s+/);
+    for (let j = 0; j < words.length; j++) {
+      const clean = words[j].toLowerCase().replace(/[^a-z]/g, "");
+      if (clean.length < 4 || DIV_STOP.has(clean)) continue;
+      const alts = DIVERGENCE_CLUSTERS[clean];
+      if (!alts || !prevWords.has(clean)) continue;
+      const available = alts.filter(a => !paraWords[i].has(a));
+      if (available.length === 0) continue;
+      const replacement = available[(i + j) % available.length];
+      const punct = words[j].slice(clean.length);
+      const isCap = words[j][0] === words[j][0].toUpperCase() && words[j][0] !== words[j][0].toLowerCase();
+      const replaced = (isCap ? replacement[0].toUpperCase() + replacement.slice(1) : replacement) + punct;
+      return [...words.slice(0, j), replaced, ...words.slice(j + 1)].join(" ");
+    }
+    return para;
+  });
+  return result.join("\n\n");
+}
+
+// ─── GPTZero Burstiness Injector ─────────────────────────────────────────────
+// Measures sentence-length std dev per paragraph. If < 5, forces variance by
+// splitting the longest sentence or inserting a short register-safe bridge.
+
+const FORMAL_BRIDGES = [
+  "This distinction matters.", "The evidence is clear.", "That much is certain.",
+  "The pattern holds.", "This warrants scrutiny.", "The implications run deep.",
+  "Not all scholars agree.", "The data confirms this.", "This remains contested.",
+];
+const CASUAL_BRIDGES = [
+  "That part matters.", "This changed things.", "It shows.", "The difference is real.",
+  "Not everyone agrees.", "Simple as that.", "Worth noting.", "The point stands.",
+];
+
+function burstinessInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const bridges = isFormal ? FORMAL_BRIDGES : CASUAL_BRIDGES;
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalInjections = 0;
+
+  const result = paragraphs.map((para, pIdx) => {
+    if (totalInjections >= 3) return para;
+    const sentences = getSentences(para);
+    if (sentences.length < 3) return para;
+    const lengths = sentences.map(s => s.split(/\s+/).length);
+    const avg = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+    const stdDev = Math.sqrt(lengths.reduce((sum, l) => sum + Math.pow(l - avg, 2), 0) / lengths.length);
+    if (stdDev >= 5) return para;
+
+    const longestIdx = lengths.indexOf(Math.max(...lengths));
+    if (lengths[longestIdx] > 18) {
+      const commaPos = sentences[longestIdx].indexOf(",", 20);
+      if (commaPos > 0 && commaPos < sentences[longestIdx].length - 15) {
+        const first = sentences[longestIdx].slice(0, commaPos).trimEnd() + ".";
+        const second = sentences[longestIdx].slice(commaPos + 1).trimStart();
+        sentences[longestIdx] = first;
+        sentences.splice(longestIdx + 1, 0, second.charAt(0).toUpperCase() + second.slice(1));
+        totalInjections++;
+        return sentences.join(" ");
+      }
+    }
+
+    const bridge = bridges[(pIdx + totalInjections) % bridges.length];
+    sentences.splice(2, 0, bridge);
+    totalInjections++;
+    return sentences.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// ─── Opener Diversity Pass ────────────────────────────────────────────────────
+// Detects duplicate sentence-opening words within a paragraph, swaps the
+// second occurrence from a curated prefix table. Max 2 swaps per paragraph.
+
+const OPENER_SWAPS: Record<string, string[]> = {
+  "this": ["That","The","It"], "the": ["Its","That","Each"],
+  "it": ["This","That","The result"], "these": ["Such","Those","The"],
+  "there": ["Here","That said,","In practice,"], "that": ["This","It","The fact"],
+  "they": ["Both","Each of them","Those"], "we": ["Our","In doing so,","The team"],
+  "one": ["A key","Each","An important"], "when": ["As","Once","Wherever"],
+  "while": ["Although","Even as","As"], "since": ["Because","As","Given that"],
+  "for": ["To","In order to","As a way to"], "with": ["Using","By","Through"],
+  "by": ["Through","Via","Using"], "in": ["Within","Across","At"],
+  "as": ["While","When","Given that"], "if": ["Should","When","Assuming"],
+  "most": ["Many","The majority of","A large portion of"],
+  "many": ["Several","A number of","Numerous"],
+  "some": ["A few","Certain","Several"], "each": ["Every","Any given","Individual"],
+  "both": ["Each","Either","The two"],
+};
+
+function openerDiversityPass(text: string): string {
+  return text.split(/\n\s*\n/).map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length < 2) return para;
+    let swaps = 0;
+    const seen = new Map<string, number>();
+    const rewritten = sentences.map((s, i) => {
+      if (swaps >= 2) return s;
+      const firstWord = s.split(/\s+/)[0].toLowerCase().replace(/[^a-z]/g, "");
+      const prevIdx = seen.get(firstWord);
+      if (prevIdx !== undefined && i > prevIdx) {
+        const alts = OPENER_SWAPS[firstWord];
+        if (alts) {
+          const body = s.slice(firstWord.length).trimStart();
+          const alt = alts[(i + para.length) % alts.length];
+          swaps++;
+          return alt + (alt.endsWith(",") ? " " + body.charAt(0).toLowerCase() + body.slice(1) : " " + body);
+        }
+      } else { seen.set(firstWord, i); }
+      return s;
+    });
+    return rewritten.join(" ");
+  }).join("\n\n");
+}
+
 // ─── Length Discipline ────────────────────────────────────────────────────────
 
 function enforceLengthDiscipline(output: string, inputWordCount: number): string {
@@ -360,6 +702,24 @@ export async function humanize(
   // Pass 5: Rhetorical fluency suppression
   const suppressed = rhetoricalSuppressionPass(cleaned);
 
-  // Pass 6: Length discipline
-  return enforceLengthDiscipline(suppressed, inputWordCount);
+  // Pass 6: ZeroGPT n-gram breaker — 30 AI-pattern rules
+  const ngramBroken = zeroGPTNgramBreaker(suppressed);
+
+  // Pass 7: Structural perplexity — parentheticals, em-dashes, semicolons
+  const structPerplexed = structuralPerplexityInjector(ngramBroken, register);
+
+  // Pass 8: Word-level perplexity — up to 3 rare synonym swaps per paragraph
+  const perplexed = perplexityInjector(structPerplexed, register);
+
+  // Pass 9: Inter-paragraph divergence — Originality.ai cross-para vocabulary
+  const diverged = interParagraphDivergencePass(perplexed);
+
+  // Pass 10: GPTZero burstiness — force sentence-length variance
+  const bursty = burstinessInjector(diverged, register);
+
+  // Pass 11: Opener diversity — no duplicate sentence-starting words
+  const opened = openerDiversityPass(bursty);
+
+  // Pass 12: Length discipline
+  return enforceLengthDiscipline(opened, inputWordCount);
 }
