@@ -188,44 +188,32 @@ function validateChunkOutput(output: string, fallback: string): string {
   return output.trim().length > 0 ? output.trim() : fallback;
 }
 
-// Pass 1 — Structural rewrite per chunk (sequential, 3s delay between calls).
+// Pass 1 — Structural rewrite per chunk (parallel).
 async function structuralPass(
   chunks: string[],
   contentType: ContentType
 ): Promise<string[]> {
-  const results: string[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const out = await callModel(
-      getStructuralPrompt(chunks[i], contentType, i),
-      STRUCTURAL_SETTINGS
-    ).then(o => validateChunkOutput(o, chunks[i]))
-     .catch(() => chunks[i]);
-    results.push(out);
-    if (i < chunks.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-  }
-  return results;
+  return Promise.all(
+    chunks.map((chunk, i) =>
+      callModel(getStructuralPrompt(chunk, contentType, i), STRUCTURAL_SETTINGS)
+        .then(o => validateChunkOutput(o, chunk))
+        .catch(() => chunk)
+    )
+  );
 }
 
-// Pass 2 — Semantic naturalness per chunk (sequential, 3s delay between calls).
+// Pass 2 — Semantic naturalness per chunk (parallel).
 async function semanticPass(
   chunks: string[],
   contentType: ContentType
 ): Promise<string[]> {
-  const results: string[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const out = await callModel(
-      getSemanticPrompt(chunks[i], contentType, i),
-      SEMANTIC_SETTINGS
-    ).then(o => validateChunkOutput(o, chunks[i]))
-     .catch(() => chunks[i]);
-    results.push(out);
-    if (i < chunks.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-  }
-  return results;
+  return Promise.all(
+    chunks.map((chunk, i) =>
+      callModel(getSemanticPrompt(chunk, contentType, i), SEMANTIC_SETTINGS)
+        .then(o => validateChunkOutput(o, chunk))
+        .catch(() => chunk)
+    )
+  );
 }
 
 // Pass 3 — Selective mutation on full merged text. Gated by score > 45.
