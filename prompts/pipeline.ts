@@ -20,9 +20,12 @@ const CHUNK_HINTS = [
 export function getStructuralPrompt(
   text: string,
   contentType: ContentType,
-  chunkIndex: number
+  chunkIndex: number,
+  register?: SourceRegister
 ): string {
   const hint = CHUNK_HINTS[chunkIndex % 5];
+  const wordCount = text.trim().split(/\s+/).length;
+  const isFormalRegister = register === "academic" || register === "formal";
 
   const contentBehavior: Record<ContentType, string> = {
     essay: `CONTENT TYPE: Academic Essay
@@ -51,10 +54,16 @@ Merge short choppy ones. No two consecutive sentences can
 have word counts within 3 of each other.`,
   };
 
+  const registerGuard = isFormalRegister ? `
+REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS:
+Text is formal/academic. Do NOT fragment complex sentences unnecessarily.
+Do NOT simplify vocabulary. Preserve clause structure.
+` : "";
+
   return `You are rewriting text to break AI detection patterns.
 Your ONLY job is changing sentence structure and rhythm —
-not word choices.
-
+not word choices, not meaning, not content.
+${registerGuard}
 ${contentBehavior[contentType]}
 
 SECTION FOCUS: ${hint}
@@ -76,10 +85,11 @@ FORBIDDEN:
 - Two consecutive sentences with word counts within 3 of each other
 - Three sentences starting with the same word
 - Keeping paragraph structure identical to input
+- Removing or summarizing any content from the input
 
-DO NOT change vocabulary or meaning.
+DO NOT change vocabulary or meaning. DO NOT remove sentences.
 Output only the rewritten text. No preamble.
-STRICT LENGTH: 90-110% of input word count.
+TARGET LENGTH: ${wordCount} words (±8%). Current input is ${wordCount} words — match it.
 Preserve paragraph breaks.
 
 TEXT:
@@ -91,11 +101,16 @@ ${text}`;
 export function getSemanticPrompt(
   text: string,
   contentType: ContentType,
-  chunkIndex: number
+  chunkIndex: number,
+  register?: SourceRegister
 ): string {
   void chunkIndex;
+  const wordCount = text.trim().split(/\s+/).length;
 
-  const isFormal = contentType === "essay" || contentType === "academic";
+  // Register lock: if classified register is formal/academic, enforce it
+  // regardless of what contentType the user selected
+  const isFormal = contentType === "essay" || contentType === "academic"
+    || register === "academic" || register === "formal";
 
   const registerBlock = isFormal ? `
 REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS
@@ -131,7 +146,7 @@ phrases with specific grounded language.`,
   };
 
   return `You are a human editor fixing word choices and voice only.
-Do NOT restructure sentences. Do NOT split or merge.
+Do NOT restructure sentences. Do NOT split or merge. Do NOT remove content.
 ${registerBlock}
 VOICE INSTRUCTIONS:
 ${voiceMap[contentType]}
@@ -156,8 +171,9 @@ CONNECTOR LIMITS:
 
 DO NOT restructure, split, or merge sentences.
 DO NOT remove or change technical vocabulary.
+DO NOT summarize or drop any content from the input.
 Output only rewritten text. No preamble.
-STRICT LENGTH: 90-110% of input word count.
+TARGET LENGTH: ${wordCount} words (±8%). Current input is ${wordCount} words — match it.
 Preserve paragraph breaks.
 
 TEXT:
@@ -168,9 +184,12 @@ ${text}`;
 
 export function getMutationPrompt(
   text: string,
-  contentType: ContentType
+  contentType: ContentType,
+  register?: SourceRegister
 ): string {
-  const isFormal = contentType === "essay" || contentType === "academic";
+  const wordCount = text.trim().split(/\s+/).length;
+  const isFormal = contentType === "essay" || contentType === "academic"
+    || register === "academic" || register === "formal";
 
   const registerLock = isFormal ? `
 REGISTER LOCK: Formal academic text.
@@ -210,7 +229,7 @@ FIX THESE IF PRESENT:
    "reach a conclusion" → "conclude"
 
 Output only the fixed text. No preamble.
-STRICT LENGTH: 90-110% of input word count.
+TARGET LENGTH: ${wordCount} words (±8%). Do NOT remove sentences or content.
 Preserve paragraph breaks.
 
 TEXT:

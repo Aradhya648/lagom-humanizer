@@ -207,15 +207,23 @@ function validateChunkOutput(output: string, fallback: string): string {
   return output.trim().length > 0 ? output.trim() : fallback;
 }
 
+// Guards against LLM shortening: if output drops below 85% of input length, use input.
+function guardLength(output: string, input: string): string {
+  const outWords = output.trim().split(/\s+/).length;
+  const inWords = input.trim().split(/\s+/).length;
+  return outWords >= inWords * 0.85 ? output.trim() : input.trim();
+}
+
 // Pass 1 — Structural rewrite per chunk (parallel).
 async function structuralPass(
   chunks: string[],
-  contentType: ContentType
+  contentType: ContentType,
+  register: SourceRegister
 ): Promise<string[]> {
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getStructuralPrompt(chunk, contentType, i), STRUCTURAL_SETTINGS)
-        .then(o => validateChunkOutput(o, chunk))
+      callModel(getStructuralPrompt(chunk, contentType, i, register), STRUCTURAL_SETTINGS)
+        .then(o => guardLength(validateChunkOutput(o, chunk), chunk))
         .catch(() => chunk)
     )
   );
@@ -224,12 +232,13 @@ async function structuralPass(
 // Pass 2 — Semantic naturalness per chunk (parallel).
 async function semanticPass(
   chunks: string[],
-  contentType: ContentType
+  contentType: ContentType,
+  register: SourceRegister
 ): Promise<string[]> {
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getSemanticPrompt(chunk, contentType, i), SEMANTIC_SETTINGS)
-        .then(o => validateChunkOutput(o, chunk))
+      callModel(getSemanticPrompt(chunk, contentType, i, register), SEMANTIC_SETTINGS)
+        .then(o => guardLength(validateChunkOutput(o, chunk), chunk))
         .catch(() => chunk)
     )
   );
@@ -238,9 +247,12 @@ async function semanticPass(
 // Pass 3 — Selective mutation on full merged text. Gated by score > 45.
 async function mutationPass(
   text: string,
-  contentType: ContentType
+  contentType: ContentType,
+  register: SourceRegister
 ): Promise<string> {
-  return callModel(getMutationPrompt(text, contentType), MUTATION_SETTINGS);
+  return callModel(getMutationPrompt(text, contentType, register), MUTATION_SETTINGS)
+    .then(o => guardLength(o, text))
+    .catch(() => text);
 }
 
 // ─── Anti-Pattern Destruction ─────────────────────────────────────────────────
@@ -720,10 +732,10 @@ export async function humanize(
   const chunks = splitIntoVariableChunks(truncated);
 
   // Pass 1: Structural rewrite — parallel per chunk
-  const structural = await structuralPass(chunks, contentType);
+  const structural = await structuralPass(chunks, contentType, register);
 
   // Pass 2: Semantic naturalness — parallel per chunk (all content types)
-  const semantic = await semanticPass(structural, contentType);
+  const semantic = await semanticPass(structural, contentType, register);
 
   // Merge chunks
   const merged = semantic.join("\n\n");
@@ -731,7 +743,7 @@ export async function humanize(
   // Pass 3: Targeted mutation on full text — only if score > 20
   const { score } = detectAI(merged);
   const mutated = score > 20
-    ? await mutationPass(merged, contentType)
+    ? await mutationPass(merged, contentType, register)
     : merged;
 
   // Pass 3a: Short-text perplexity hardening — dedicated LLM pass for <120 word inputs
