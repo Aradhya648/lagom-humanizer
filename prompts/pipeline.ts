@@ -1,11 +1,9 @@
 export type ContentType = "essay" | "academic" | "email" | "document" | "general";
 
 // Kept for backward compatibility — currently imported by lib/humanizer.ts.
-// Remove when humanizer.ts is updated to use ContentType.
 export type SourceRegister = "academic" | "formal" | "neutral" | "informal";
 
 // ─── Chunk Variation Hints ────────────────────────────────────────────────────
-// Cycled by chunkIndex % 5 inside getStructuralPrompt.
 
 const CHUNK_HINTS = [
   "Open with a short direct sentence under 10 words.",
@@ -15,9 +13,10 @@ const CHUNK_HINTS = [
   "Make the last sentence of this section shorter than the rest.",
 ];
 
-// ─── Pass 1: Structural Rewrite ───────────────────────────────────────────────
+// ─── Pass 1+2 Combined: Structural + Semantic in one call ─────────────────────
+// Merging both passes halves LLM calls, critical for Vercel 10s timeout.
 
-export function getStructuralPrompt(
+export function getCombinedPrompt(
   text: string,
   contentType: ContentType,
   chunkIndex: number,
@@ -26,154 +25,61 @@ export function getStructuralPrompt(
   const hint = CHUNK_HINTS[chunkIndex % 5];
   const wordCount = text.trim().split(/\s+/).length;
   const isFormalRegister = register === "academic" || register === "formal";
+  const isFormal = contentType === "essay" || contentType === "academic" || isFormalRegister;
 
-  const contentBehavior: Record<ContentType, string> = {
-    essay: `CONTENT TYPE: Academic Essay
-Vary clause weight within sentences. Long subordinate clauses
-and semicolons are correct. Do NOT fragment formal sentences.
-Do NOT add contractions. Preserve academic register.`,
-
-    academic: `CONTENT TYPE: Academic Writing
-Vary clause weight within sentences. Long subordinate clauses
-and semicolons are correct. Do NOT fragment formal sentences.
-Do NOT add contractions. Preserve academic register.`,
-
-    email: `CONTENT TYPE: Email
-Mix short punchy sentences (under 10 words) with longer ones
-(20+ words). Natural conversational rhythm.`,
-
-    document: `CONTENT TYPE: Formal Document
-Vary paragraph density. Sentence lengths should vary while
-remaining professional.`,
-
-    general: `CONTENT TYPE: General Writing
-MANDATORY: Every paragraph MUST contain at least one sentence
-under 10 words AND at least one sentence over 22 words.
-Reorder clauses aggressively. Split long uniform sentences.
-Merge short choppy ones. No two consecutive sentences can
-have word counts within 3 of each other.`,
-  };
-
-  const registerGuard = isFormalRegister ? `
+  const registerGuard = isFormal ? `
 REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS:
-Text is formal/academic. Do NOT fragment complex sentences unnecessarily.
-Do NOT simplify vocabulary. Preserve clause structure.
-` : "";
-
-  return `You are rewriting text to break AI detection patterns.
-Your ONLY job is changing sentence structure and rhythm —
-not word choices, not meaning, not content.
-${registerGuard}
-${contentBehavior[contentType]}
-
-SECTION FOCUS: ${hint}
-
-MANDATORY STRUCTURAL CHANGES — you MUST do ALL of these:
-1. Identify the longest sentence and split it into two at a
-   natural break point.
-2. Identify two consecutive sentences with similar lengths
-   and make one significantly shorter (cut it by half) or
-   significantly longer (add a dependent clause).
-3. Change the opening word of at least 3 sentences so no
-   two consecutive sentences start with the same word.
-4. If any paragraph has 4+ sentences all between 15-25 words,
-   rewrite one to be under 10 words and one to be over 28.
-5. Convert at least one compound sentence joined by "and"
-   into two separate sentences, or vice versa.
-
-FORBIDDEN:
-- Two consecutive sentences with word counts within 3 of each other
-- Three sentences starting with the same word
-- Keeping paragraph structure identical to input
-- Removing or summarizing any content from the input
-
-DO NOT change vocabulary or meaning. DO NOT remove sentences.
-Output only the rewritten text. No preamble.
-TARGET LENGTH: ${wordCount} words (±8%). Current input is ${wordCount} words — match it.
-Preserve paragraph breaks.
-
-TEXT:
-${text}`;
-}
-
-// ─── Pass 2: Semantic Naturalness ─────────────────────────────────────────────
-
-export function getSemanticPrompt(
-  text: string,
-  contentType: ContentType,
-  chunkIndex: number,
-  register?: SourceRegister
-): string {
-  void chunkIndex;
-  const wordCount = text.trim().split(/\s+/).length;
-
-  // Register lock: if classified register is formal/academic, enforce it
-  // regardless of what contentType the user selected
-  const isFormal = contentType === "essay" || contentType === "academic"
-    || register === "academic" || register === "formal";
-
-  const registerBlock = isFormal ? `
-REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS
-Formal academic text. FORBIDDEN: contractions, casual language,
-colloquialisms. Formal connectors (however, therefore) are
-correct here — limit to 2 each max.
+Text is formal/academic. No contractions. No casual language.
+Do NOT simplify vocabulary. Preserve complex clause structure.
+Formal connectors (however, therefore) are fine — max 2 each.
 ` : "";
 
   const voiceMap: Record<ContentType, string> = {
-    essay: `Formal academic voice. Replace AI filler phrases with
-precise academic alternatives. Keep all technical vocabulary.`,
+    essay: `Formal academic voice. Replace AI filler phrases with precise academic alternatives.
+Keep all technical vocabulary intact.`,
 
-    academic: `Formal academic voice. Replace AI filler phrases with
-precise academic alternatives. Keep all technical vocabulary.`,
+    academic: `Formal academic voice. Replace AI filler phrases with precise academic alternatives.
+Keep all technical vocabulary intact.`,
 
-    email: `Warm professional voice. Use contractions freely.
+    email: `Warm professional voice. Use contractions naturally.
 Sound like a real person, not a template.`,
 
-    document: `Formal precise voice. No contractions. Replace vague
-phrases with specific grounded language.`,
+    document: `Formal precise voice. No contractions. Replace vague phrases with specific grounded language.`,
 
-    general: `Natural educated voice. You MUST make these changes:
-1. Replace at least 3 formal/stiff phrases with conversational
-   equivalents (e.g. "individuals" → "people", "utilize" → "use",
-   "subsequently" → "then", "endeavor" → "try").
-2. Add one contraction somewhere natural (it's, that's, don't,
-   they're, we've).
-3. Replace one abstract claim with a more concrete/specific version.
-4. If any sentence starts with "The" or "This", change at least
-   one of them to start differently.
-5. Make one sentence noticeably more direct — remove hedging
-   language like "tend to", "often appear to", "seems to".`,
+    general: isFormalRegister
+      ? `Formal educated voice. Replace AI filler with precise alternatives. Keep technical vocabulary.`
+      : `Natural educated voice. Replace 2–3 stiff phrases with conversational ones.
+Add one contraction. Make one sentence more direct by removing hedging language.`,
   };
 
-  return `You are a human editor fixing word choices and voice only.
-Do NOT restructure sentences. Do NOT split or merge. Do NOT remove content.
-${registerBlock}
-VOICE INSTRUCTIONS:
+  return `You are a human editor rewriting text to evade AI detectors.
+Do this in ONE pass: fix structure AND voice simultaneously.
+Do NOT remove, summarize, or drop any content.
+${registerGuard}
+SECTION FOCUS: ${hint}
+
+STRUCTURAL CHANGES (do ALL):
+1. Split the longest sentence into two at a natural break.
+2. Make two consecutive same-length sentences different — cut one or extend one.
+3. Change the opening word of at least 2 sentences so no two consecutive sentences start the same.
+4. If all sentences are 15–25 words, rewrite one to be under 10 and one over 28.
+
+VOICE CHANGES (do ALL):
 ${voiceMap[contentType]}
 
-BANNED PHRASES — replace every instance:
-"it is important to note" | "it is worth noting"
-"it is worth mentioning" | "it should be noted"
-"in conclusion" | "in summary" | "to summarize"
-"this essay will" | "as an AI language model"
-"in today's fast-paced world" | "first and foremost"
-"last but not least" | "all in all" | "in a nutshell"
-"it goes without saying" | "needless to say"
-"a multitude of" | "a plethora of"
-"in today's world" | "a testament to"
-"at its core" | "it is no secret that"
-"with that being said" | "that being said"
+BANNED PHRASES — replace every instance found:
+"it is important to note" | "it is worth noting" | "it should be noted"
+"in conclusion" | "in summary" | "first and foremost" | "last but not least"
+"as an AI language model" | "in today's world" | "a testament to"
+"at its core" | "needless to say" | "with that being said"
+"a multitude of" | "a plethora of" | "delve into"
 
 CONNECTOR LIMITS:
-- "however": max 1 per section
-- "therefore": max 1 per section
-- "moreover" / "furthermore" / "additionally": 0 — remove
+- "however": max 1 | "therefore": max 1
+- "moreover" / "furthermore" / "additionally": 0 — remove entirely
 
-DO NOT restructure, split, or merge sentences.
-DO NOT remove or change technical vocabulary.
-DO NOT summarize or drop any content from the input.
-Output only rewritten text. No preamble.
-TARGET LENGTH: ${wordCount} words (±8%). Current input is ${wordCount} words — match it.
+OUTPUT: Only the rewritten text. No preamble, no labels.
+TARGET LENGTH: ${wordCount} words (±8%). Do NOT shorten below ${Math.round(wordCount * 0.88)} words.
 Preserve paragraph breaks.
 
 TEXT:
@@ -197,7 +103,7 @@ No contractions. No casual language. Preserve formal vocabulary.
 ` : "";
 
   return `Final surgical pass. Fix ONLY these patterns if present.
-Do not touch anything already reading naturally.
+Do not touch anything already reading naturally. Do NOT remove content.
 ${registerLock}
 
 FIX THESE IF PRESENT:
@@ -225,8 +131,6 @@ FIX THESE IF PRESENT:
    "make a decision" → "decide"
    "have an understanding" → "understand"
    "provide assistance" → "help"
-   "give consideration" → "consider"
-   "reach a conclusion" → "conclude"
 
 Output only the fixed text. No preamble.
 TARGET LENGTH: ${wordCount} words (±8%). Do NOT remove sentences or content.

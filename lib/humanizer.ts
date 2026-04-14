@@ -1,8 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { detectAI } from "@/lib/detector";
 import {
-  getStructuralPrompt,
-  getSemanticPrompt,
+  getCombinedPrompt,
   getMutationPrompt,
   type ContentType,
 } from "@/prompts/pipeline";
@@ -107,10 +106,15 @@ export function splitIntoVariableChunks(text: string): string[] {
     }
   }
 
-  if (chunks.length > 8) {
-    const head = chunks.slice(0, 7);
-    const tail = chunks.slice(7).join(" ");
-    return [...head, tail];
+  // Cap at 3 chunks to stay within Vercel's 10s timeout.
+  // Each chunk gets one LLM call; 3 parallel calls + mutation = ~4 total calls.
+  if (chunks.length > 3) {
+    const third = Math.ceil(chunks.length / 3);
+    return [
+      chunks.slice(0, third).join(" "),
+      chunks.slice(third, third * 2).join(" "),
+      chunks.slice(third * 2).join(" "),
+    ];
   }
 
   return chunks.length > 0 ? chunks : [text.trim()];
@@ -214,37 +218,23 @@ function guardLength(output: string, input: string): string {
   return outWords >= inWords * 0.85 ? output.trim() : input.trim();
 }
 
-// Pass 1 — Structural rewrite per chunk (parallel).
-async function structuralPass(
+// Pass 1 — Combined structural + semantic rewrite per chunk (parallel).
+// Merging both passes into one halves LLM calls, keeping total under Vercel's 10s limit.
+async function combinedPass(
   chunks: string[],
   contentType: ContentType,
   register: SourceRegister
 ): Promise<string[]> {
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getStructuralPrompt(chunk, contentType, i, register), STRUCTURAL_SETTINGS)
+      callModel(getCombinedPrompt(chunk, contentType, i, register), STRUCTURAL_SETTINGS)
         .then(o => guardLength(validateChunkOutput(o, chunk), chunk))
         .catch(() => chunk)
     )
   );
 }
 
-// Pass 2 — Semantic naturalness per chunk (parallel).
-async function semanticPass(
-  chunks: string[],
-  contentType: ContentType,
-  register: SourceRegister
-): Promise<string[]> {
-  return Promise.all(
-    chunks.map((chunk, i) =>
-      callModel(getSemanticPrompt(chunk, contentType, i, register), SEMANTIC_SETTINGS)
-        .then(o => guardLength(validateChunkOutput(o, chunk), chunk))
-        .catch(() => chunk)
-    )
-  );
-}
-
-// Pass 3 — Selective mutation on full merged text. Gated by score > 45.
+// Pass 2 — Selective mutation on full merged text. Gated by score > 20.
 async function mutationPass(
   text: string,
   contentType: ContentType,
@@ -731,16 +721,13 @@ export async function humanize(
   const register = classifyRegister(truncated);
   const chunks = splitIntoVariableChunks(truncated);
 
-  // Pass 1: Structural rewrite — parallel per chunk
-  const structural = await structuralPass(chunks, contentType, register);
-
-  // Pass 2: Semantic naturalness — parallel per chunk (all content types)
-  const semantic = await semanticPass(structural, contentType, register);
+  // Pass 1: Combined structural + semantic rewrite — parallel per chunk (max 3 chunks)
+  const combined = await combinedPass(chunks, contentType, register);
 
   // Merge chunks
-  const merged = semantic.join("\n\n");
+  const merged = combined.join("\n\n");
 
-  // Pass 3: Targeted mutation on full text — only if score > 20
+  // Pass 2: Targeted mutation on full text — only if score > 20
   const { score } = detectAI(merged);
   const mutated = score > 20
     ? await mutationPass(merged, contentType, register)
