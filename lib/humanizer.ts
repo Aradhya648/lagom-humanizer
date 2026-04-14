@@ -668,6 +668,44 @@ function enforceLengthDiscipline(output: string, inputWordCount: number): string
   return kept.join(" ");
 }
 
+// ─── Short-Text Perplexity Hardening ─────────────────────────────────────────
+// Dedicated LLM pass for texts under 120 words. Short texts have fewer chunks
+// and less natural variance, making them easier for detectors to flag.
+// Forces 5 structural breaks that mimic human writing patterns.
+
+async function shortTextPerplexityHardening(
+  text: string,
+  register: SourceRegister
+): Promise<string> {
+  const isFormal = register === "academic" || register === "formal";
+
+  const contractionRule = isFormal
+    ? "Do NOT add contractions — preserve the formal register."
+    : "Add one contraction that isn't already there (it's, that's, you'll, isn't, etc.)";
+
+  const wordRule = isFormal
+    ? "Replace one overly complex word with a simpler but still formal equivalent (e.g., utilize→use, demonstrate→show)."
+    : "Change one formal word to an everyday word (utilize→use, demonstrate→show, significant→real).";
+
+  const prompt = `You are editing a SHORT piece of text (under 120 words) to make it read as completely human-written and pass perplexity-based AI detectors. ${isFormal ? "This text is formal/academic — keep it formal throughout." : ""}
+
+Apply ALL of the following changes:
+1. Break one sentence into two shorter ones at a natural point
+2. ${contractionRule}
+3. Make one sentence start with an unexpected word given the context — not "The", "This", "It", "However", "Moreover"
+4. ${wordRule}
+5. If every sentence ends with a period, vary one with a colon, semicolon, or em-dash
+
+OUTPUT: Only the revised text. No labels, no commentary. Same meaning, same topic, same register.
+
+TEXT:
+${text}`;
+
+  return callGemini(prompt, { temperature: 0.88, topP: 0.93 })
+    .then(o => (o.trim().length > 0 ? o.trim() : text))
+    .catch(() => text);
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -696,8 +734,14 @@ export async function humanize(
     ? await mutationPass(merged, contentType)
     : merged;
 
+  // Pass 3a: Short-text perplexity hardening — dedicated LLM pass for <120 word inputs
+  const mutatedWordCount = mutated.split(/\s+/).length;
+  const shortHardened = mutatedWordCount < 120
+    ? await shortTextPerplexityHardening(mutated, register)
+    : mutated;
+
   // Pass 4: Anti-pattern cleanup
-  const cleaned = antiPatternPass(mutated, register);
+  const cleaned = antiPatternPass(shortHardened, register);
 
   // Pass 5: Rhetorical fluency suppression
   const suppressed = rhetoricalSuppressionPass(cleaned);
