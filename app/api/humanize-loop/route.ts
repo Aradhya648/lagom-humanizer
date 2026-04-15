@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { humanizeLoop } from "@/lib/humanizer";
+import { humanizeLoop } from "@/lib/humanizer-loop";
 import { type ContentType } from "@/prompts/pipeline";
 
 // Long timeout — Playwright + multiple LLM iterations can take 60–90s

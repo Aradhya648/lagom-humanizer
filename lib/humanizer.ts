@@ -281,7 +281,7 @@ const ANTI_PATTERNS: { regex: RegExp; replacements: string[] }[] = [
 
 const CASUAL_REPLACEMENT_RE = /^(Sure|Look|Right|So\b|Then again|All told|Plus|The thing is|One thing that stands out|What matters|Worth flagging)/i;
 
-function antiPatternPass(text: string, register: SourceRegister): string {
+export function antiPatternPass(text: string, register: SourceRegister): string {
   const paragraphs = text.split(/\n\s*\n/);
   let replacementIndex = 0;
   const isFormal = register === "academic" || register === "formal";
@@ -329,7 +329,7 @@ const RHETORICAL_REPLACEMENTS: [RegExp, string][] = [
   [/\boverarchingly\b/gi,               "broadly"],
 ];
 
-function rhetoricalSuppressionPass(text: string): string {
+export function rhetoricalSuppressionPass(text: string): string {
   let result = text;
   for (const [pattern, replacement] of RHETORICAL_REPLACEMENTS) {
     result = result.replace(pattern, replacement);
@@ -376,7 +376,7 @@ const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
   { word: "small",     replacements: ["slim", "modest", "narrow"],                        formalSafe: false },
 ];
 
-function perplexityInjector(text: string, register: SourceRegister): string {
+export function perplexityInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const pool = isFormal ? PERPLEXITY_SWAP_POOL.filter(s => s.formalSafe) : PERPLEXITY_SWAP_POOL;
   return text.split(/\n\s*\n/).map((para) => {
@@ -434,7 +434,7 @@ const ZEROGPT_NGRAMS: Array<[RegExp, string]> = [
   [/\bserves as a\b/gi, "functions as a"],
 ];
 
-function zeroGPTNgramBreaker(text: string): string {
+export function zeroGPTNgramBreaker(text: string): string {
   let result = text;
   for (const [pattern, replacement] of ZEROGPT_NGRAMS) {
     result = result.replace(pattern, replacement);
@@ -578,7 +578,7 @@ const CASUAL_BRIDGES = [
   "Not everyone agrees.", "Simple as that.", "Worth noting.", "The point stands.",
 ];
 
-function burstinessInjector(text: string, register: SourceRegister): string {
+export function burstinessInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const bridges = isFormal ? FORMAL_BRIDGES : CASUAL_BRIDGES;
   const paragraphs = text.split(/\n\s*\n/);
@@ -635,7 +635,7 @@ const OPENER_SWAPS: Record<string, string[]> = {
   "both": ["Each","Either","The two"],
 };
 
-function openerDiversityPass(text: string): string {
+export function openerDiversityPass(text: string): string {
   return text.split(/\n\s*\n/).map((para) => {
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
@@ -785,90 +785,5 @@ export async function humanize(
   return enforceLengthDiscipline(opened, inputWordCount);
 }
 
-// ─── GPTZero Feedback Loop ────────────────────────────────────────────────────
-// Runs humanize(), checks live GPTZero score via Playwright scraper,
-// and re-applies targeted mutation if score is above threshold.
-// Max 3 iterations. Returns best result seen across all iterations.
-
-export interface HumanizeLoopResult {
-  text: string;
-  gptzeroScore: number;        // final GPTZero score (0–100), -1 if scraper failed
-  iterations: number;
-  scoreHistory: number[];
-}
-
-export async function humanizeLoop(
-  inputText: string,
-  contentType: ContentType,
-  wordLimit: number,
-  options: { threshold?: number; maxIterations?: number } = {}
-): Promise<HumanizeLoopResult> {
-  const { threshold = 15, maxIterations = 3 } = options;
-
-  // Lazy-import scraper so it only loads on Render (has Playwright),
-  // not on Vercel builds where chromium is unavailable.
-  const { scrapeGPTZero } = await import("@/lib/gptzero-scraper");
-
-  const register = classifyRegister(inputText);
-  const scoreHistory: number[] = [];
-  let best = { text: "", score: 100 };
-  let current = await humanize(inputText, contentType, wordLimit);
-
-  for (let iter = 0; iter < maxIterations; iter++) {
-    const result = await scrapeGPTZero(current);
-    const score = result.score;
-    scoreHistory.push(score);
-
-    // Track best
-    if (score !== -1 && score < best.score) {
-      best = { text: current, score };
-    } else if (iter === 0) {
-      best = { text: current, score: score === -1 ? 100 : score };
-    }
-
-    // Done if below threshold or scraper failed
-    if (score !== -1 && score <= threshold) break;
-    if (score === -1) break;
-    if (iter === maxIterations - 1) break;
-
-    // Re-mutate focusing on worst sentences:
-    // Split into sentences, target those most likely causing detection
-    const sentences = current.split(/(?<=[.!?])\s+(?=[A-Z"'])/);
-    const avgLen = sentences.reduce((a, s) => a + s.split(/\s+/).length, 0) / Math.max(sentences.length, 1);
-
-    // Flag uniform-length runs (GPTZero signal) and re-mutate full text
-    const reMutationPrompt = `You are fixing AI-detection signals in text. The text below is scoring ${score}% AI on GPTZero.
-
-TARGET SIGNALS TO FIX:
-- Sentences with identical or near-identical word counts (avg: ${Math.round(avgLen)} words) — vary lengths aggressively
-- First words of consecutive sentences that are the same — change them
-- Any connector words at sentence starts: However, Moreover, Furthermore, Additionally — remove or rephrase
-- Overly smooth transitions between ideas — add a rough edge, mid-thought parenthetical, or abrupt pivot
-
-RULES:
-- Preserve all factual content and meaning exactly
-- Do NOT add casual/informal tone if text is ${register} register
-- Do NOT add asterisks, headers, or formatting
-- Return ONLY the rewritten text, no commentary
-
-TEXT:
-${current}`;
-
-    const remutated = await callGemini(reMutationPrompt, { temperature: 0.92, topP: 0.95 });
-
-    // Apply deterministic passes again on remutated output
-    const cleaned = antiPatternPass(remutated, register);
-    const suppressed = rhetoricalSuppressionPass(cleaned);
-    const ngramBroken = zeroGPTNgramBreaker(suppressed);
-    const perplexed = perplexityInjector(ngramBroken, register);
-    const bursty = burstinessInjector(perplexed, register);
-    current = openerDiversityPass(bursty);
-  }
-
-  return {
-    text: best.text || current,
-    gptzeroScore: best.score,
-    iterations: scoreHistory.length,
-    scoreHistory,
-  };
-}
+// humanizeLoop() has been moved to lib/humanizer-loop.ts to keep Playwright
+// out of the Edge runtime bundle used by /api/humanize.
