@@ -3,9 +3,10 @@ import { humanize } from "@/lib/humanizer";
 import { detectAI } from "@/lib/detector";
 import { type ContentType } from "@/prompts/pipeline";
 
-// Vercel Pro/Enterprise honours this; Hobby plan caps at 10s regardless.
-// Deploy on Render/Railway for full timeout support.
-export const maxDuration = 60;
+// Edge runtime: 30s timeout on Vercel Hobby (vs 10s for serverless).
+// This is what allows the full 2-pass pipeline to complete.
+export const runtime = "edge";
+export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
