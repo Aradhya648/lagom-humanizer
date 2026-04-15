@@ -107,15 +107,10 @@ export function splitIntoVariableChunks(text: string): string[] {
     }
   }
 
-  // Cap at 3 chunks to stay within Vercel's 10s timeout.
-  // Each chunk gets one LLM call; 3 parallel calls + mutation = ~4 total calls.
-  if (chunks.length > 3) {
-    const third = Math.ceil(chunks.length / 3);
-    return [
-      chunks.slice(0, third).join(" "),
-      chunks.slice(third, third * 2).join(" "),
-      chunks.slice(third * 2).join(" "),
-    ];
+  if (chunks.length > 8) {
+    const head = chunks.slice(0, 7);
+    const tail = chunks.slice(7).join(" ");
+    return [...head, tail];
   }
 
   return chunks.length > 0 ? chunks : [text.trim()];
@@ -185,7 +180,7 @@ async function callGemini(prompt: string, settings: GenSettings): Promise<string
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     generationConfig: {
       temperature: settings.temperature,
       topP: settings.topP,
@@ -212,23 +207,15 @@ function validateChunkOutput(output: string, fallback: string): string {
   return output.trim().length > 0 ? output.trim() : fallback;
 }
 
-// Guards against LLM shortening: if output drops below 85% of input length, use input.
-function guardLength(output: string, input: string): string {
-  const outWords = output.trim().split(/\s+/).length;
-  const inWords = input.trim().split(/\s+/).length;
-  return outWords >= inWords * 0.85 ? output.trim() : input.trim();
-}
-
 // Pass 1 — Structural rewrite per chunk (parallel).
 async function structuralPass(
   chunks: string[],
-  contentType: ContentType,
-  register: SourceRegister
+  contentType: ContentType
 ): Promise<string[]> {
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getStructuralPrompt(chunk, contentType, i, register), STRUCTURAL_SETTINGS)
-        .then(o => guardLength(validateChunkOutput(o, chunk), chunk))
+      callModel(getStructuralPrompt(chunk, contentType, i), STRUCTURAL_SETTINGS)
+        .then(o => validateChunkOutput(o, chunk))
         .catch(() => chunk)
     )
   );
@@ -237,27 +224,23 @@ async function structuralPass(
 // Pass 2 — Semantic naturalness per chunk (parallel).
 async function semanticPass(
   chunks: string[],
-  contentType: ContentType,
-  register: SourceRegister
+  contentType: ContentType
 ): Promise<string[]> {
   return Promise.all(
     chunks.map((chunk, i) =>
-      callModel(getSemanticPrompt(chunk, contentType, i, register), SEMANTIC_SETTINGS)
-        .then(o => guardLength(validateChunkOutput(o, chunk), chunk))
+      callModel(getSemanticPrompt(chunk, contentType, i), SEMANTIC_SETTINGS)
+        .then(o => validateChunkOutput(o, chunk))
         .catch(() => chunk)
     )
   );
 }
 
-// Pass 3 — Selective mutation on full merged text. Gated by score > 20.
+// Pass 3 — Selective mutation on full merged text. Gated by score > 45.
 async function mutationPass(
   text: string,
-  contentType: ContentType,
-  register: SourceRegister
+  contentType: ContentType
 ): Promise<string> {
-  return callModel(getMutationPrompt(text, contentType, register), MUTATION_SETTINGS)
-    .then(o => guardLength(o, text))
-    .catch(() => text);
+  return callModel(getMutationPrompt(text, contentType), MUTATION_SETTINGS);
 }
 
 // ─── Anti-Pattern Destruction ─────────────────────────────────────────────────
@@ -281,7 +264,7 @@ const ANTI_PATTERNS: { regex: RegExp; replacements: string[] }[] = [
 
 const CASUAL_REPLACEMENT_RE = /^(Sure|Look|Right|So\b|Then again|All told|Plus|The thing is|One thing that stands out|What matters|Worth flagging)/i;
 
-export function antiPatternPass(text: string, register: SourceRegister): string {
+function antiPatternPass(text: string, register: SourceRegister): string {
   const paragraphs = text.split(/\n\s*\n/);
   let replacementIndex = 0;
   const isFormal = register === "academic" || register === "formal";
@@ -329,7 +312,7 @@ const RHETORICAL_REPLACEMENTS: [RegExp, string][] = [
   [/\boverarchingly\b/gi,               "broadly"],
 ];
 
-export function rhetoricalSuppressionPass(text: string): string {
+function rhetoricalSuppressionPass(text: string): string {
   let result = text;
   for (const [pattern, replacement] of RHETORICAL_REPLACEMENTS) {
     result = result.replace(pattern, replacement);
@@ -376,7 +359,7 @@ const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
   { word: "small",     replacements: ["slim", "modest", "narrow"],                        formalSafe: false },
 ];
 
-export function perplexityInjector(text: string, register: SourceRegister): string {
+function perplexityInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const pool = isFormal ? PERPLEXITY_SWAP_POOL.filter(s => s.formalSafe) : PERPLEXITY_SWAP_POOL;
   return text.split(/\n\s*\n/).map((para) => {
@@ -434,7 +417,7 @@ const ZEROGPT_NGRAMS: Array<[RegExp, string]> = [
   [/\bserves as a\b/gi, "functions as a"],
 ];
 
-export function zeroGPTNgramBreaker(text: string): string {
+function zeroGPTNgramBreaker(text: string): string {
   let result = text;
   for (const [pattern, replacement] of ZEROGPT_NGRAMS) {
     result = result.replace(pattern, replacement);
@@ -578,7 +561,7 @@ const CASUAL_BRIDGES = [
   "Not everyone agrees.", "Simple as that.", "Worth noting.", "The point stands.",
 ];
 
-export function burstinessInjector(text: string, register: SourceRegister): string {
+function burstinessInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const bridges = isFormal ? FORMAL_BRIDGES : CASUAL_BRIDGES;
   const paragraphs = text.split(/\n\s*\n/);
@@ -635,7 +618,7 @@ const OPENER_SWAPS: Record<string, string[]> = {
   "both": ["Each","Either","The two"],
 };
 
-export function openerDiversityPass(text: string): string {
+function openerDiversityPass(text: string): string {
   return text.split(/\n\s*\n/).map((para) => {
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
@@ -685,44 +668,6 @@ function enforceLengthDiscipline(output: string, inputWordCount: number): string
   return kept.join(" ");
 }
 
-// ─── Short-Text Perplexity Hardening ─────────────────────────────────────────
-// Dedicated LLM pass for texts under 120 words. Short texts have fewer chunks
-// and less natural variance, making them easier for detectors to flag.
-// Forces 5 structural breaks that mimic human writing patterns.
-
-async function shortTextPerplexityHardening(
-  text: string,
-  register: SourceRegister
-): Promise<string> {
-  const isFormal = register === "academic" || register === "formal";
-
-  const contractionRule = isFormal
-    ? "Do NOT add contractions — preserve the formal register."
-    : "Add one contraction that isn't already there (it's, that's, you'll, isn't, etc.)";
-
-  const wordRule = isFormal
-    ? "Replace one overly complex word with a simpler but still formal equivalent (e.g., utilize→use, demonstrate→show)."
-    : "Change one formal word to an everyday word (utilize→use, demonstrate→show, significant→real).";
-
-  const prompt = `You are editing a SHORT piece of text (under 120 words) to make it read as completely human-written and pass perplexity-based AI detectors. ${isFormal ? "This text is formal/academic — keep it formal throughout." : ""}
-
-Apply ALL of the following changes:
-1. Break one sentence into two shorter ones at a natural point
-2. ${contractionRule}
-3. Make one sentence start with an unexpected word given the context — not "The", "This", "It", "However", "Moreover"
-4. ${wordRule}
-5. If every sentence ends with a period, vary one with a colon, semicolon, or em-dash
-
-OUTPUT: Only the revised text. No labels, no commentary. Same meaning, same topic, same register.
-
-TEXT:
-${text}`;
-
-  return callGemini(prompt, { temperature: 0.88, topP: 0.93 })
-    .then(o => (o.trim().length > 0 ? o.trim() : text))
-    .catch(() => text);
-}
-
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -737,10 +682,10 @@ export async function humanize(
   const chunks = splitIntoVariableChunks(truncated);
 
   // Pass 1: Structural rewrite — parallel per chunk
-  const structural = await structuralPass(chunks, contentType, register);
+  const structural = await structuralPass(chunks, contentType);
 
-  // Pass 2: Semantic naturalness — parallel per chunk
-  const semantic = await semanticPass(structural, contentType, register);
+  // Pass 2: Semantic naturalness — parallel per chunk (all content types)
+  const semantic = await semanticPass(structural, contentType);
 
   // Merge chunks
   const merged = semantic.join("\n\n");
@@ -748,17 +693,11 @@ export async function humanize(
   // Pass 3: Targeted mutation on full text — only if score > 20
   const { score } = detectAI(merged);
   const mutated = score > 20
-    ? await mutationPass(merged, contentType, register)
+    ? await mutationPass(merged, contentType)
     : merged;
 
-  // Pass 3a: Short-text perplexity hardening — dedicated LLM pass for <120 word inputs
-  const mutatedWordCount = mutated.split(/\s+/).length;
-  const shortHardened = mutatedWordCount < 120
-    ? await shortTextPerplexityHardening(mutated, register)
-    : mutated;
-
   // Pass 4: Anti-pattern cleanup
-  const cleaned = antiPatternPass(shortHardened, register);
+  const cleaned = antiPatternPass(mutated, register);
 
   // Pass 5: Rhetorical fluency suppression
   const suppressed = rhetoricalSuppressionPass(cleaned);
@@ -785,5 +724,90 @@ export async function humanize(
   return enforceLengthDiscipline(opened, inputWordCount);
 }
 
-// humanizeLoop() has been moved to lib/humanizer-loop.ts to keep Playwright
-// out of the Edge runtime bundle used by /api/humanize.
+// ─── GPTZero Feedback Loop ────────────────────────────────────────────────────
+// Runs humanize(), checks live GPTZero score via Playwright scraper,
+// and re-applies targeted mutation if score is above threshold.
+// Max 3 iterations. Returns best result seen across all iterations.
+
+export interface HumanizeLoopResult {
+  text: string;
+  gptzeroScore: number;        // final GPTZero score (0–100), -1 if scraper failed
+  iterations: number;
+  scoreHistory: number[];
+}
+
+export async function humanizeLoop(
+  inputText: string,
+  contentType: ContentType,
+  wordLimit: number,
+  options: { threshold?: number; maxIterations?: number } = {}
+): Promise<HumanizeLoopResult> {
+  const { threshold = 15, maxIterations = 3 } = options;
+
+  // Lazy-import scraper so it only loads on Render (has Playwright),
+  // not on Vercel builds where chromium is unavailable.
+  const { scrapeGPTZero } = await import("@/lib/gptzero-scraper");
+
+  const register = classifyRegister(inputText);
+  const scoreHistory: number[] = [];
+  let best = { text: "", score: 100 };
+  let current = await humanize(inputText, contentType, wordLimit);
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    const result = await scrapeGPTZero(current);
+    const score = result.score;
+    scoreHistory.push(score);
+
+    // Track best
+    if (score !== -1 && score < best.score) {
+      best = { text: current, score };
+    } else if (iter === 0) {
+      best = { text: current, score: score === -1 ? 100 : score };
+    }
+
+    // Done if below threshold or scraper failed
+    if (score !== -1 && score <= threshold) break;
+    if (score === -1) break;
+    if (iter === maxIterations - 1) break;
+
+    // Re-mutate focusing on worst sentences:
+    // Split into sentences, target those most likely causing detection
+    const sentences = current.split(/(?<=[.!?])\s+(?=[A-Z"'])/);
+    const avgLen = sentences.reduce((a, s) => a + s.split(/\s+/).length, 0) / Math.max(sentences.length, 1);
+
+    // Flag uniform-length runs (GPTZero signal) and re-mutate full text
+    const reMutationPrompt = `You are fixing AI-detection signals in text. The text below is scoring ${score}% AI on GPTZero.
+
+TARGET SIGNALS TO FIX:
+- Sentences with identical or near-identical word counts (avg: ${Math.round(avgLen)} words) — vary lengths aggressively
+- First words of consecutive sentences that are the same — change them
+- Any connector words at sentence starts: However, Moreover, Furthermore, Additionally — remove or rephrase
+- Overly smooth transitions between ideas — add a rough edge, mid-thought parenthetical, or abrupt pivot
+
+RULES:
+- Preserve all factual content and meaning exactly
+- Do NOT add casual/informal tone if text is ${register} register
+- Do NOT add asterisks, headers, or formatting
+- Return ONLY the rewritten text, no commentary
+
+TEXT:
+${current}`;
+
+    const remutated = await callGemini(reMutationPrompt, { temperature: 0.92, topP: 0.95 });
+
+    // Apply deterministic passes again on remutated output
+    const cleaned = antiPatternPass(remutated, register);
+    const suppressed = rhetoricalSuppressionPass(cleaned);
+    const ngramBroken = zeroGPTNgramBreaker(suppressed);
+    const perplexed = perplexityInjector(ngramBroken, register);
+    const bursty = burstinessInjector(perplexed, register);
+    current = openerDiversityPass(bursty);
+  }
+
+  return {
+    text: best.text || current,
+    gptzeroScore: best.score,
+    iterations: scoreHistory.length,
+    scoreHistory,
+  };
+}

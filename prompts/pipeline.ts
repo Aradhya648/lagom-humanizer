@@ -1,9 +1,11 @@
 export type ContentType = "essay" | "academic" | "email" | "document" | "general";
 
 // Kept for backward compatibility — currently imported by lib/humanizer.ts.
+// Remove when humanizer.ts is updated to use ContentType.
 export type SourceRegister = "academic" | "formal" | "neutral" | "informal";
 
 // ─── Chunk Variation Hints ────────────────────────────────────────────────────
+// Cycled by chunkIndex % 5 inside getStructuralPrompt.
 
 const CHUNK_HINTS = [
   "Open with a short direct sentence under 10 words.",
@@ -18,61 +20,66 @@ const CHUNK_HINTS = [
 export function getStructuralPrompt(
   text: string,
   contentType: ContentType,
-  chunkIndex: number,
-  register?: SourceRegister
+  chunkIndex: number
 ): string {
   const hint = CHUNK_HINTS[chunkIndex % 5];
-  const wordCount = text.trim().split(/\s+/).length;
-  const isFormalRegister = register === "academic" || register === "formal";
 
   const contentBehavior: Record<ContentType, string> = {
     essay: `CONTENT TYPE: Academic Essay
-Vary clause weight. Long subordinate clauses and semicolons are correct.
-Do NOT fragment formal sentences. Do NOT add contractions.`,
+Vary clause weight within sentences. Long subordinate clauses
+and semicolons are correct. Do NOT fragment formal sentences.
+Do NOT add contractions. Preserve academic register.`,
 
     academic: `CONTENT TYPE: Academic Writing
-Vary clause weight. Long subordinate clauses and semicolons are correct.
-Do NOT fragment formal sentences. Do NOT add contractions.`,
+Vary clause weight within sentences. Long subordinate clauses
+and semicolons are correct. Do NOT fragment formal sentences.
+Do NOT add contractions. Preserve academic register.`,
 
     email: `CONTENT TYPE: Email
-Mix short punchy sentences (under 10 words) with longer ones (20+ words).
-Natural conversational rhythm.`,
+Mix short punchy sentences (under 10 words) with longer ones
+(20+ words). Natural conversational rhythm.`,
 
     document: `CONTENT TYPE: Formal Document
-Vary paragraph density. Sentence lengths should vary while remaining professional.`,
+Vary paragraph density. Sentence lengths should vary while
+remaining professional.`,
 
     general: `CONTENT TYPE: General Writing
-Every paragraph MUST have at least one sentence under 10 words AND one over 22 words.
-Reorder clauses aggressively. Split long uniform sentences. Merge short choppy ones.`,
+MANDATORY: Every paragraph MUST contain at least one sentence
+under 10 words AND at least one sentence over 22 words.
+Reorder clauses aggressively. Split long uniform sentences.
+Merge short choppy ones. No two consecutive sentences can
+have word counts within 3 of each other.`,
   };
 
-  const registerGuard = isFormalRegister ? `
-REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS:
-Text is formal/academic. Do NOT fragment complex sentences.
-Do NOT simplify vocabulary. Preserve clause structure.
-` : "";
-
   return `You are rewriting text to break AI detection patterns.
-Your ONLY job: change sentence structure and rhythm — NOT word choices.
-${registerGuard}
+Your ONLY job is changing sentence structure and rhythm —
+not word choices.
+
 ${contentBehavior[contentType]}
 
 SECTION FOCUS: ${hint}
 
-MANDATORY STRUCTURAL CHANGES:
-1. Split the longest sentence into two at a natural break point.
-2. Make two consecutive same-length sentences different — cut one or extend one.
-3. Change the opening word of at least 3 sentences so no two consecutive start the same.
-4. If all sentences are 15–25 words, rewrite one to under 10 and one to over 28.
-5. Convert one compound "and" sentence into two, or merge two short ones.
+MANDATORY STRUCTURAL CHANGES — you MUST do ALL of these:
+1. Identify the longest sentence and split it into two at a
+   natural break point.
+2. Identify two consecutive sentences with similar lengths
+   and make one significantly shorter (cut it by half) or
+   significantly longer (add a dependent clause).
+3. Change the opening word of at least 3 sentences so no
+   two consecutive sentences start with the same word.
+4. If any paragraph has 4+ sentences all between 15-25 words,
+   rewrite one to be under 10 words and one to be over 28.
+5. Convert at least one compound sentence joined by "and"
+   into two separate sentences, or vice versa.
 
 FORBIDDEN:
-- Two consecutive sentences within 3 words of each other in length
+- Two consecutive sentences with word counts within 3 of each other
 - Three sentences starting with the same word
-- Removing or summarizing content
+- Keeping paragraph structure identical to input
 
-DO NOT change vocabulary or meaning. Output only the rewritten text. No preamble.
-TARGET LENGTH: ${wordCount} words (±8%). Do NOT drop below ${Math.round(wordCount * 0.88)} words.
+DO NOT change vocabulary or meaning.
+Output only the rewritten text. No preamble.
+STRICT LENGTH: 90-110% of input word count.
 Preserve paragraph breaks.
 
 TEXT:
@@ -84,55 +91,63 @@ ${text}`;
 export function getSemanticPrompt(
   text: string,
   contentType: ContentType,
-  chunkIndex: number,
-  register?: SourceRegister
+  chunkIndex: number
 ): string {
   void chunkIndex;
-  const wordCount = text.trim().split(/\s+/).length;
 
-  // Register lock: if classified register is formal/academic, enforce it
-  // regardless of what contentType the user selected
-  const isFormal = contentType === "essay" || contentType === "academic"
-    || register === "academic" || register === "formal";
+  const isFormal = contentType === "essay" || contentType === "academic";
 
   const registerBlock = isFormal ? `
-REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS:
-Formal academic text. FORBIDDEN: contractions, casual language, colloquialisms.
-Formal connectors (however, therefore) are correct — max 2 each.
+REGISTER LOCK — OVERRIDES ALL OTHER INSTRUCTIONS
+Formal academic text. FORBIDDEN: contractions, casual language,
+colloquialisms. Formal connectors (however, therefore) are
+correct here — limit to 2 each max.
 ` : "";
 
   const voiceMap: Record<ContentType, string> = {
-    essay: `Formal academic voice. Replace AI filler phrases with precise academic alternatives.
-Keep all technical vocabulary.`,
+    essay: `Formal academic voice. Replace AI filler phrases with
+precise academic alternatives. Keep all technical vocabulary.`,
 
-    academic: `Formal academic voice. Replace AI filler phrases with precise academic alternatives.
-Keep all technical vocabulary.`,
+    academic: `Formal academic voice. Replace AI filler phrases with
+precise academic alternatives. Keep all technical vocabulary.`,
 
-    email: `Warm professional voice. Use contractions freely. Sound like a real person, not a template.`,
+    email: `Warm professional voice. Use contractions freely.
+Sound like a real person, not a template.`,
 
-    document: `Formal precise voice. No contractions. Replace vague phrases with specific grounded language.`,
+    document: `Formal precise voice. No contractions. Replace vague
+phrases with specific grounded language.`,
 
-    general: isFormal
-      ? `Formal educated voice. Replace AI filler with precise alternatives. Keep technical vocabulary.`
-      : `Natural educated voice:
-1. Replace 3 formal/stiff phrases with conversational ones (e.g. "individuals"→"people", "utilize"→"use").
-2. Add one natural contraction (it's, that's, don't, they're).
-3. Replace one abstract claim with a concrete/specific version.
-4. Make one sentence more direct — remove hedging like "tend to", "seems to".`,
+    general: `Natural educated voice. You MUST make these changes:
+1. Replace at least 3 formal/stiff phrases with conversational
+   equivalents (e.g. "individuals" → "people", "utilize" → "use",
+   "subsequently" → "then", "endeavor" → "try").
+2. Add one contraction somewhere natural (it's, that's, don't,
+   they're, we've).
+3. Replace one abstract claim with a more concrete/specific version.
+4. If any sentence starts with "The" or "This", change at least
+   one of them to start differently.
+5. Make one sentence noticeably more direct — remove hedging
+   language like "tend to", "often appear to", "seems to".`,
   };
 
   return `You are a human editor fixing word choices and voice only.
-Do NOT restructure sentences. Do NOT split or merge. Do NOT remove content.
+Do NOT restructure sentences. Do NOT split or merge.
 ${registerBlock}
 VOICE INSTRUCTIONS:
 ${voiceMap[contentType]}
 
 BANNED PHRASES — replace every instance:
-"it is important to note" | "it is worth noting" | "it should be noted"
-"in conclusion" | "in summary" | "to summarize" | "first and foremost"
-"as an AI language model" | "in today's world" | "a testament to"
-"at its core" | "needless to say" | "with that being said"
-"a multitude of" | "a plethora of" | "delve into" | "it goes without saying"
+"it is important to note" | "it is worth noting"
+"it is worth mentioning" | "it should be noted"
+"in conclusion" | "in summary" | "to summarize"
+"this essay will" | "as an AI language model"
+"in today's fast-paced world" | "first and foremost"
+"last but not least" | "all in all" | "in a nutshell"
+"it goes without saying" | "needless to say"
+"a multitude of" | "a plethora of"
+"in today's world" | "a testament to"
+"at its core" | "it is no secret that"
+"with that being said" | "that being said"
 
 CONNECTOR LIMITS:
 - "however": max 1 per section
@@ -141,9 +156,8 @@ CONNECTOR LIMITS:
 
 DO NOT restructure, split, or merge sentences.
 DO NOT remove or change technical vocabulary.
-DO NOT summarize or drop any content.
 Output only rewritten text. No preamble.
-TARGET LENGTH: ${wordCount} words (±8%). Do NOT drop below ${Math.round(wordCount * 0.88)} words.
+STRICT LENGTH: 90-110% of input word count.
 Preserve paragraph breaks.
 
 TEXT:
@@ -154,12 +168,9 @@ ${text}`;
 
 export function getMutationPrompt(
   text: string,
-  contentType: ContentType,
-  register?: SourceRegister
+  contentType: ContentType
 ): string {
-  const wordCount = text.trim().split(/\s+/).length;
-  const isFormal = contentType === "essay" || contentType === "academic"
-    || register === "academic" || register === "formal";
+  const isFormal = contentType === "essay" || contentType === "academic";
 
   const registerLock = isFormal ? `
 REGISTER LOCK: Formal academic text.
@@ -167,21 +178,39 @@ No contractions. No casual language. Preserve formal vocabulary.
 ` : "";
 
   return `Final surgical pass. Fix ONLY these patterns if present.
-Do not touch anything already reading naturally. Do NOT remove content.
+Do not touch anything already reading naturally.
 ${registerLock}
 
 FIX THESE IF PRESENT:
-1. UNIFORM SENTENCE LENGTHS — find a paragraph where all sentences are within 5 words
-   of each other. Cut one to under 10 words.
-2. REPEATED OPENERS — two consecutive sentences starting the same word. Change the second.
-3. OVERUSED CONNECTORS — "however", "therefore", "moreover", "furthermore" more than once
-   in a paragraph. Remove the extra.
-4. PREDICTABLE ENDINGS — sentences ending "...which ultimately leads to better outcomes".
-   Cut the trailing clause.
-5. ZOMBIE NOUNS — "make a decision"→"decide", "have an understanding"→"understand".
+
+1. UNIFORM SENTENCE LENGTHS
+   Find any paragraph where all sentences are within 5 words
+   of each other. Fix by cutting one sentence to under 10 words.
+
+2. REPEATED OPENERS
+   Find two consecutive sentences starting with the same word.
+   Change the opener of the second one.
+
+3. OVERUSED CONNECTORS
+   "however", "therefore", "moreover", "furthermore" appearing
+   more than once in a paragraph. Remove the extra occurrence.
+
+4. PREDICTABLE SENTENCE ENDINGS
+   Sentences ending with tidy wrap-up clauses like
+   "...which ultimately leads to better outcomes" or
+   "...making it essential for success."
+   Cut these trailing clauses. End the sentence earlier.
+
+5. ZOMBIE NOUNS
+   Convert one nominalization back to a verb:
+   "make a decision" → "decide"
+   "have an understanding" → "understand"
+   "provide assistance" → "help"
+   "give consideration" → "consider"
+   "reach a conclusion" → "conclude"
 
 Output only the fixed text. No preamble.
-TARGET LENGTH: ${wordCount} words (±8%). Do NOT remove sentences.
+STRICT LENGTH: 90-110% of input word count.
 Preserve paragraph breaks.
 
 TEXT:
