@@ -60,21 +60,23 @@ ${contentBehavior[contentType]}
 SECTION FOCUS: ${hint}
 
 MANDATORY STRUCTURAL CHANGES — you MUST do ALL of these:
-1. Identify the longest sentence and split it into two at a
-   natural break point.
-2. Identify two consecutive sentences with similar lengths
-   and make one significantly shorter (cut it by half) or
-   significantly longer (add a dependent clause).
-3. Change the opening word of at least 3 sentences so no
+1. Every paragraph MUST contain at least one sentence under
+   9 words AND at least one sentence over 28 words. No exceptions.
+2. The gap between the shortest and longest sentence in each
+   paragraph must be at least 18 words.
+3. Split the longest uniform sentence into two at a comma or
+   natural clause boundary.
+4. Change the opening word of at least 3 sentences so no
    two consecutive sentences start with the same word.
-4. If any paragraph has 4+ sentences all between 15-25 words,
-   rewrite one to be under 10 words and one to be over 28.
 5. Convert at least one compound sentence joined by "and"
    into two separate sentences, or vice versa.
+6. Add a parenthetical aside (set off by commas or em-dashes)
+   to at least one sentence per paragraph.
 
 FORBIDDEN:
-- Two consecutive sentences with word counts within 3 of each other
+- Two consecutive sentences with word counts within 4 of each other
 - Three sentences starting with the same word
+- All sentences in a paragraph having lengths within 10 words of each other
 - Keeping paragraph structure identical to input
 
 DO NOT change vocabulary or meaning.
@@ -183,9 +185,10 @@ ${registerLock}
 
 FIX THESE IF PRESENT:
 
-1. UNIFORM SENTENCE LENGTHS
-   Find any paragraph where all sentences are within 5 words
-   of each other. Fix by cutting one sentence to under 10 words.
+1. UNIFORM SENTENCE LENGTHS (GPTZero signal)
+   Find any paragraph where all sentences are within 8 words
+   of each other. Force extreme variance: cut one sentence to
+   under 8 words AND extend another to over 28.
 
 2. REPEATED OPENERS
    Find two consecutive sentences starting with the same word.
@@ -195,7 +198,7 @@ FIX THESE IF PRESENT:
    "however", "therefore", "moreover", "furthermore" appearing
    more than once in a paragraph. Remove the extra occurrence.
 
-4. PREDICTABLE SENTENCE ENDINGS
+4. PREDICTABLE SENTENCE ENDINGS (GPTZero signal)
    Sentences ending with tidy wrap-up clauses like
    "...which ultimately leads to better outcomes" or
    "...making it essential for success."
@@ -206,8 +209,15 @@ FIX THESE IF PRESENT:
    "make a decision" → "decide"
    "have an understanding" → "understand"
    "provide assistance" → "help"
-   "give consideration" → "consider"
-   "reach a conclusion" → "conclude"
+
+6. ADD ONE EM-DASH ASIDE (GPTZero signal breaker)
+   In one sentence of 18+ words, insert an em-dash aside:
+   "The system operates—under most conditions—as expected."
+   Choose a point where a parenthetical remark fits naturally.
+
+7. SMOOTH TRANSITIONS (GPTZero signal)
+   If all paragraphs flow perfectly into each other, make one
+   transition slightly more abrupt or add a brief pivot phrase.
 
 Output only the fixed text. No preamble.
 STRICT LENGTH: 90-110% of input word count.

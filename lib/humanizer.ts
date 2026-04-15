@@ -366,7 +366,7 @@ function perplexityInjector(text: string, register: SourceRegister): string {
     let swapCount = 0;
     let current = para;
     for (const swap of pool) {
-      if (swapCount >= 3) break;
+      if (swapCount >= 5) break;
       const re = new RegExp(`\\b${swap.word}\\b`, "i");
       if (!re.test(current)) continue;
       const idx = (current.length + swapCount) % swap.replacements.length;
@@ -568,31 +568,108 @@ function burstinessInjector(text: string, register: SourceRegister): string {
   let totalInjections = 0;
 
   const result = paragraphs.map((para, pIdx) => {
-    if (totalInjections >= 3) return para;
+    if (totalInjections >= 4) return para;
     const sentences = getSentences(para);
-    if (sentences.length < 3) return para;
+    if (sentences.length < 2) return para;
     const lengths = sentences.map(s => s.split(/\s+/).length);
     const avg = lengths.reduce((a, b) => a + b, 0) / lengths.length;
     const stdDev = Math.sqrt(lengths.reduce((sum, l) => sum + Math.pow(l - avg, 2), 0) / lengths.length);
-    if (stdDev >= 5) return para;
 
+    // Fire if stdDev < 8 (was 5 — now catches nearly-uniform paragraphs too)
+    if (stdDev >= 8) return para;
+
+    let modified = [...sentences];
+    let didModify = false;
+
+    // Strategy A: Split longest sentence at a comma
     const longestIdx = lengths.indexOf(Math.max(...lengths));
     if (lengths[longestIdx] > 18) {
-      const commaPos = sentences[longestIdx].indexOf(",", 20);
-      if (commaPos > 0 && commaPos < sentences[longestIdx].length - 15) {
-        const first = sentences[longestIdx].slice(0, commaPos).trimEnd() + ".";
-        const second = sentences[longestIdx].slice(commaPos + 1).trimStart();
-        sentences[longestIdx] = first;
-        sentences.splice(longestIdx + 1, 0, second.charAt(0).toUpperCase() + second.slice(1));
+      const commaPos = modified[longestIdx].indexOf(",", 15);
+      if (commaPos > 0 && commaPos < modified[longestIdx].length - 15) {
+        const first = modified[longestIdx].slice(0, commaPos).trimEnd() + ".";
+        const second = modified[longestIdx].slice(commaPos + 1).trimStart();
+        modified[longestIdx] = first;
+        modified.splice(longestIdx + 1, 0, second.charAt(0).toUpperCase() + second.slice(1));
+        didModify = true;
         totalInjections++;
-        return sentences.join(" ");
       }
     }
 
-    const bridge = bridges[(pIdx + totalInjections) % bridges.length];
-    sentences.splice(2, 0, bridge);
-    totalInjections++;
-    return sentences.join(" ");
+    // Strategy B: Also inject a bridge sentence for extreme variance (GPTZero needs spiky length pattern)
+    if (modified.length >= 3) {
+      const bridge = bridges[(pIdx + totalInjections) % bridges.length];
+      // Insert near start (after sentence 1) to create early contrast
+      modified.splice(1, 0, bridge);
+      if (!didModify) totalInjections++;
+    }
+
+    return modified.join(" ");
+  });
+
+  return result.join("\n\n");
+}
+
+// ─── Em-Dash Injector ────────────────────────────────────────────────────────
+// Em-dashes are strongly human. GPTZero's model rarely sees them in AI output
+// → injecting them raises per-token perplexity and burstiness simultaneously.
+// Targets sentences 20+ words with a natural mid-point for insertion.
+
+const FORMAL_EM_ASIDES = [
+  "and this distinction matters",
+  "at least in most formulations",
+  "though the evidence is mixed",
+  "a point often overlooked",
+  "the data bears this out",
+  "not a trivial consideration",
+  "worth noting here",
+  "broadly speaking",
+];
+const CASUAL_EM_ASIDES = [
+  "and that's the key part",
+  "though not always",
+  "at least in theory",
+  "which matters a lot",
+  "worth flagging",
+  "more or less",
+];
+
+function emDashInjector(text: string, register: SourceRegister): string {
+  const isFormal = register === "academic" || register === "formal";
+  const asides = isFormal ? FORMAL_EM_ASIDES : CASUAL_EM_ASIDES;
+  const paragraphs = text.split(/\n\s*\n/);
+  let totalInjections = 0;
+
+  const result = paragraphs.map((para, pIdx) => {
+    if (totalInjections >= 3) return para;
+    const sentences = getSentences(para);
+    const modified = sentences.map((sentence, sIdx) => {
+      if (totalInjections >= 3) return sentence;
+      const words = sentence.split(/\s+/).length;
+      if (words < 20) return sentence;
+      // Only inject into every 2nd qualifying sentence to avoid over-formatting
+      if ((pIdx + sIdx) % 2 !== 0) return sentence;
+
+      // Find a natural injection point: after a content word around the mid-point
+      const wordArr = sentence.split(/\s+/);
+      const mid = Math.floor(wordArr.length * 0.45);
+      // Look for a word boundary near mid that isn't a comma or conjunction
+      let insertAt = -1;
+      for (let offset = 0; offset <= 4; offset++) {
+        const idx = mid + offset;
+        if (idx < wordArr.length - 4 && !/^(and|or|but|the|a|an|of|in|to|with|for)$/i.test(wordArr[idx])) {
+          insertAt = idx;
+          break;
+        }
+      }
+      if (insertAt === -1) return sentence;
+
+      const aside = asides[(pIdx + sIdx + totalInjections) % asides.length];
+      const before = wordArr.slice(0, insertAt + 1).join(" ");
+      const after = wordArr.slice(insertAt + 1).join(" ");
+      totalInjections++;
+      return `${before}—${aside}—${after}`;
+    });
+    return modified.join(" ");
   });
 
   return result.join("\n\n");
@@ -717,11 +794,30 @@ export async function humanize(
   // Pass 10: GPTZero burstiness — force sentence-length variance
   const bursty = burstinessInjector(diverged, register);
 
-  // Pass 11: Opener diversity — no duplicate sentence-starting words
-  const opened = openerDiversityPass(bursty);
+  // Pass 11: Em-dash injection — raises per-token perplexity for GPTZero
+  const emdashed = emDashInjector(bursty, register);
 
-  // Pass 12: Length discipline
-  return enforceLengthDiscipline(opened, inputWordCount);
+  // Pass 12: Opener diversity — no duplicate sentence-starting words
+  const opened = openerDiversityPass(emdashed);
+
+  // Pass 13: Length discipline (ceiling + floor)
+  const lengthCapped = enforceLengthDiscipline(opened, inputWordCount);
+
+  // Pass 14: Expand if LLM compressed too aggressively (< 88% of original)
+  const finalWordCount = lengthCapped.split(/\s+/).length;
+  if (finalWordCount < inputWordCount * 0.88) {
+    const targetWords = Math.round(inputWordCount * 0.97);
+    const expansionPrompt = `Expand this text to approximately ${targetWords} words by adding relevant elaboration, examples, or detail within existing sentences. Do NOT add new sections or change any facts. Preserve the exact register and style.
+
+Output only the expanded text. No preamble.
+
+TEXT:
+${lengthCapped}`;
+    const expanded = await callModel(expansionPrompt, { temperature: 0.70, topP: 0.90 });
+    return enforceLengthDiscipline(expanded.trim() || lengthCapped, Math.round(inputWordCount * 1.05));
+  }
+
+  return lengthCapped;
 }
 
 // ─── GPTZero Feedback Loop ────────────────────────────────────────────────────
