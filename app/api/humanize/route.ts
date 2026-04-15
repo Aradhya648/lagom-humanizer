@@ -3,10 +3,9 @@ import { humanize } from "@/lib/humanizer";
 import { detectAI } from "@/lib/detector";
 import { type ContentType } from "@/prompts/pipeline";
 
-// Edge runtime: 30s timeout on Vercel Hobby (vs 10s for serverless).
-// This is what allows the full 2-pass pipeline to complete.
-export const runtime = "edge";
-export const maxDuration = 30;
+// Serverless runtime. Hobby plan caps at 10s.
+// Pipeline uses gemini-2.0-flash (1-2s/call) to fit within that window.
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
