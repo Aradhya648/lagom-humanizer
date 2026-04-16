@@ -12,6 +12,6 @@ cmds = ["npm run build"]
 
 [deploy]
 startCommand = "npm start"
-healthcheckPath = "/api/humanize"
-healthcheckTimeout = 30
+healthcheckPath = "/api/health"
+healthcheckTimeout = 60
 restartPolicyType = "on_failure"
