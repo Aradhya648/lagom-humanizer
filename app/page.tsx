@@ -8,6 +8,8 @@ import Spinner from "@/components/Spinner";
 import { detectAI, DetectionResult } from "@/lib/detector";
 
 const MAX_WORDS = 1000;
+// If NEXT_PUBLIC_DEEP_API_URL is set, deep calls go cross-domain (Vercel → Railway).
+// If unset (i.e. running ON Railway), deep calls go to same origin via relative path.
 const DEEP_API_URL = process.env.NEXT_PUBLIC_DEEP_API_URL ?? "";
 
 function countWords(text: string): number {
@@ -67,9 +69,11 @@ export default function Home() {
     setDeepIterations(null);
 
     try {
-      if (deepMode && DEEP_API_URL) {
-        // Deep mode — calls Fly.io endpoint with multi-detector feedback loop
-        const res = await fetch(`${DEEP_API_URL}/api/humanize-deep`, {
+      if (deepMode) {
+        // Deep mode — calls /api/humanize-deep (same origin on Railway,
+        // or cross-domain if NEXT_PUBLIC_DEEP_API_URL points to Railway from Vercel)
+        const deepEndpoint = `${DEEP_API_URL}/api/humanize-deep`;
+        const res = await fetch(deepEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: inputText, contentType, wordLimit }),
@@ -180,21 +184,19 @@ export default function Home() {
             </span>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">
-            {/* Deep Mode toggle — only shown if DEEP_API_URL is configured */}
-            {DEEP_API_URL && (
-              <button
-                onClick={() => setDeepMode(d => !d)}
-                title={deepMode ? "Deep Mode on — uses Fly.io + 4 detectors (slow)" : "Enable Deep Mode"}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all duration-200 ${
-                  deepMode
-                    ? "border-accent/60 text-accent bg-accent/10"
-                    : "border-border text-muted hover:border-accent/30 hover:text-accent/70"
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${deepMode ? "bg-accent animate-pulse" : "bg-muted/40"}`} />
-                Deep
-              </button>
-            )}
+            {/* Deep Mode toggle — always visible */}
+            <button
+              onClick={() => setDeepMode(d => !d)}
+              title={deepMode ? "Deep Mode on — 4-detector loop, ~60–90s" : "Enable Deep Mode — scores all detectors and iterates"}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all duration-200 ${
+                deepMode
+                  ? "border-accent/60 text-accent bg-accent/10"
+                  : "border-border text-muted hover:border-accent/30 hover:text-accent/70"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${deepMode ? "bg-accent animate-pulse" : "bg-muted/40"}`} />
+              Deep
+            </button>
             <button
               onClick={handleHumanize}
               disabled={loading || !inputText.trim()}
