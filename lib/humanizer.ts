@@ -172,6 +172,9 @@ const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.85, topP: 0.95 };
 const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90 };
 const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92 };
 
+// Stronger model for the mutation pass — better instruction following
+const MUTATION_MODEL = "gemini-2.5-pro";
+
 // ─── Model Wrappers ───────────────────────────────────────────────────────────
 
 async function callGemini(prompt: string, settings: GenSettings): Promise<string> {
@@ -235,12 +238,26 @@ async function semanticPass(
   );
 }
 
-// Pass 3 — Selective mutation on full merged text. Gated by score > 45.
+// Pass 3 — Selective mutation on full merged text. Uses stronger model.
 async function mutationPass(
   text: string,
   contentType: ContentType
 ): Promise<string> {
-  return callModel(getMutationPrompt(text, contentType), MUTATION_SETTINGS);
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+  const { GoogleGenerativeAI } = await import("@google/generative-ai");
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: MUTATION_MODEL,
+    generationConfig: {
+      temperature: MUTATION_SETTINGS.temperature,
+      topP: MUTATION_SETTINGS.topP,
+      maxOutputTokens: 8192,
+    },
+  });
+  const result = await model.generateContent(getMutationPrompt(text, contentType));
+  return result.response.text().trim() || text;
 }
 
 // ─── Anti-Pattern Destruction ─────────────────────────────────────────────────

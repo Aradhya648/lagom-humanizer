@@ -8,9 +8,17 @@ import Spinner from "@/components/Spinner";
 import { detectAI, DetectionResult } from "@/lib/detector";
 
 const MAX_WORDS = 1000;
+const DEEP_API_URL = process.env.NEXT_PUBLIC_DEEP_API_URL ?? "";
 
 function countWords(text: string): number {
   return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+}
+
+interface DeepScores {
+  gptzero: number;
+  zerogpt: number;
+  quillbot: number;
+  originality: number;
 }
 
 export default function Home() {
@@ -19,6 +27,9 @@ export default function Home() {
   const [contentType, setContentType] = useState<ContentType>("general");
   const [wordLimit, setWordLimit] = useState(1000);
   const [loading, setLoading] = useState(false);
+  const [deepMode, setDeepMode] = useState(false);
+  const [deepScores, setDeepScores] = useState<DeepScores | null>(null);
+  const [deepIterations, setDeepIterations] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -52,30 +63,59 @@ export default function Home() {
     setError(null);
     setOutputText("");
     setOutputScore(null);
+    setDeepScores(null);
+    setDeepIterations(null);
 
     try {
-      const res = await fetch("/api/humanize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: inputText, contentType, wordLimit }),
-      });
+      if (deepMode && DEEP_API_URL) {
+        // Deep mode — calls Fly.io endpoint with multi-detector feedback loop
+        const res = await fetch(`${DEEP_API_URL}/api/humanize-deep`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: inputText, contentType, wordLimit }),
+        });
 
-      const data = await res.json();
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Deep humanize failed");
 
-      if (!res.ok) {
-        throw new Error(data.error || "Something went wrong");
+        setOutputText(data.humanizedText);
+        setDeepIterations(data.iterations);
+
+        const fs = data.finalScores;
+        setDeepScores({
+          gptzero: fs?.gptzero?.score ?? -1,
+          zerogpt: fs?.zerogpt?.score ?? -1,
+          quillbot: fs?.quillbot?.score ?? -1,
+          originality: fs?.originality?.score ?? -1,
+        });
+
+        // Use local detector for score pill
+        const { detectAI } = await import("@/lib/detector");
+        const r = detectAI(data.humanizedText);
+        setOutputScore(r);
+        const orig = detectAI(inputText);
+        setInputScore(orig);
+      } else {
+        // Fast mode — Vercel endpoint
+        const res = await fetch("/api/humanize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: inputText, contentType, wordLimit }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Something went wrong");
+
+        setOutputText(data.humanizedText);
+        setOutputScore({ score: data.humanizedScore, label: getLabelFromScore(data.humanizedScore) });
+        setInputScore({ score: data.originalScore, label: getLabelFromScore(data.originalScore) });
       }
-
-      setOutputText(data.humanizedText);
-      setOutputScore({ score: data.humanizedScore, label: getLabelFromScore(data.humanizedScore) });
-      // Also update input score from API response
-      setInputScore({ score: data.originalScore, label: getLabelFromScore(data.originalScore) });
     } catch (err) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setLoading(false);
     }
-  }, [inputText, contentType, wordLimit, loading]);
+  }, [inputText, contentType, wordLimit, loading, deepMode]);
 
   const handleCopy = useCallback(async () => {
     if (!outputText) return;
@@ -139,20 +179,37 @@ export default function Home() {
               {wordLimit}
             </span>
           </div>
-          <button
-            onClick={handleHumanize}
-            disabled={loading || !inputText.trim()}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-accent text-background font-semibold text-sm transition-all duration-200 hover:bg-accent-dim disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
-          >
-            {loading ? (
-              <>
-                <Spinner size={15} />
-                Humanizing...
-              </>
-            ) : (
-              "Humanize"
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            {/* Deep Mode toggle — only shown if DEEP_API_URL is configured */}
+            {DEEP_API_URL && (
+              <button
+                onClick={() => setDeepMode(d => !d)}
+                title={deepMode ? "Deep Mode on — uses Fly.io + 4 detectors (slow)" : "Enable Deep Mode"}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all duration-200 ${
+                  deepMode
+                    ? "border-accent/60 text-accent bg-accent/10"
+                    : "border-border text-muted hover:border-accent/30 hover:text-accent/70"
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${deepMode ? "bg-accent animate-pulse" : "bg-muted/40"}`} />
+                Deep
+              </button>
             )}
-          </button>
+            <button
+              onClick={handleHumanize}
+              disabled={loading || !inputText.trim()}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-accent text-background font-semibold text-sm transition-all duration-200 hover:bg-accent-dim disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
+            >
+              {loading ? (
+                <>
+                  <Spinner size={15} />
+                  {deepMode ? "Deep analyzing..." : "Humanizing..."}
+                </>
+              ) : (
+                deepMode ? "Deep Humanize" : "Humanize"
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Error */}
@@ -259,6 +316,26 @@ export default function Home() {
               {!loading && outputText && <WordReveal text={outputText} />}
             </div>
 
+            {/* Deep mode detector scores */}
+            {deepScores && (
+              <div className="flex flex-wrap items-center gap-2 px-1 pb-1">
+                <span className="text-xs text-muted">
+                  {deepIterations != null ? `${deepIterations} iter${deepIterations !== 1 ? "s" : ""}` : ""}
+                </span>
+                {(["gptzero", "zerogpt", "quillbot", "originality"] as const).map(k => {
+                  const s = deepScores[k];
+                  if (s === -1) return null;
+                  const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-yellow-400" : "text-red-400";
+                  const labels: Record<string, string> = { gptzero: "GPTZero", zerogpt: "ZeroGPT", quillbot: "QuillBot", originality: "Origin." };
+                  return (
+                    <span key={k} className="text-xs tabular-nums flex items-center gap-1">
+                      <span className="text-muted/60">{labels[k]}</span>
+                      <span className={`font-medium ${color}`}>{s}%</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
             <div className="flex items-center justify-between px-1">
               <span className="text-xs text-muted tabular-nums">
                 {outputWordCount > 0
