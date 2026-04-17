@@ -281,7 +281,7 @@ const ANTI_PATTERNS: { regex: RegExp; replacements: string[] }[] = [
 
 const CASUAL_REPLACEMENT_RE = /^(Sure|Look|Right|So\b|Then again|All told|Plus|The thing is|One thing that stands out|What matters|Worth flagging)/i;
 
-function antiPatternPass(text: string, register: SourceRegister): string {
+export function antiPatternPass(text: string, register: SourceRegister): string {
   const paragraphs = text.split(/\n\s*\n/);
   let replacementIndex = 0;
   const isFormal = register === "academic" || register === "formal";
@@ -329,7 +329,7 @@ const RHETORICAL_REPLACEMENTS: [RegExp, string][] = [
   [/\boverarchingly\b/gi,               "broadly"],
 ];
 
-function rhetoricalSuppressionPass(text: string): string {
+export function rhetoricalSuppressionPass(text: string): string {
   let result = text;
   for (const [pattern, replacement] of RHETORICAL_REPLACEMENTS) {
     result = result.replace(pattern, replacement);
@@ -376,7 +376,7 @@ const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
   { word: "small",     replacements: ["slim", "modest", "narrow"],                        formalSafe: false },
 ];
 
-function perplexityInjector(text: string, register: SourceRegister): string {
+export function perplexityInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const pool = isFormal ? PERPLEXITY_SWAP_POOL.filter(s => s.formalSafe) : PERPLEXITY_SWAP_POOL;
   return text.split(/\n\s*\n/).map((para) => {
@@ -434,7 +434,7 @@ const ZEROGPT_NGRAMS: Array<[RegExp, string]> = [
   [/\bserves as a\b/gi, "functions as a"],
 ];
 
-function zeroGPTNgramBreaker(text: string): string {
+export function zeroGPTNgramBreaker(text: string): string {
   let result = text;
   for (const [pattern, replacement] of ZEROGPT_NGRAMS) {
     result = result.replace(pattern, replacement);
@@ -578,7 +578,7 @@ const CASUAL_BRIDGES = [
   "Not everyone agrees.", "Simple as that.", "Worth noting.", "The point stands.",
 ];
 
-function burstinessInjector(text: string, register: SourceRegister): string {
+export function burstinessInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const bridges = isFormal ? FORMAL_BRIDGES : CASUAL_BRIDGES;
   const paragraphs = text.split(/\n\s*\n/);
@@ -712,7 +712,7 @@ const OPENER_SWAPS: Record<string, string[]> = {
   "both": ["Each","Either","The two"],
 };
 
-function openerDiversityPass(text: string): string {
+export function openerDiversityPass(text: string): string {
   return text.split(/\n\s*\n/).map((para) => {
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
