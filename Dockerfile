@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Install Chromium system deps
+# Install Chromium system dependencies
 RUN apt-get update && apt-get install -y \
     libnss3 \
     libatk1.0-0 \
@@ -19,8 +19,11 @@ RUN apt-get update && apt-get install -y \
     libcairo2 \
     libxshmfence1 \
     libx11-xcb1 \
-    fonts-noto-color-emoji \
+    libxtst6 \
     fonts-liberation \
+    fonts-noto-color-emoji \
+    wget \
+    ca-certificates \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,15 +32,16 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-# Install Playwright Chromium only (skip firefox/webkit to save space)
+# Install Playwright Chromium to a fixed path inside /app so it persists
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
 RUN npx playwright install chromium
 
 COPY . .
-
 RUN npm run build
 
 EXPOSE 3000
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
 
 CMD ["npm", "start"]
