@@ -242,19 +242,33 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
   try {
     console.log("[quillbot] navigating...");
     await page.goto("https://quillbot.com/ai-content-detector", {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle",   // wait for JS to finish loading the editor
       timeout: TIMEOUT,
     });
     console.log("[quillbot] title:", await page.title());
     await dismissCookies(page);
+    await page.waitForTimeout(2000); // extra wait for React hydration
 
-    const textarea = page.locator(
-      ".ql-editor, [contenteditable='true'], textarea, [role='textbox']"
-    ).first();
+    // QuillBot uses a ProseMirror/Quill editor — try many selectors
+    const textarea = page.locator([
+      ".ql-editor",
+      "[contenteditable='true']",
+      "[data-slate-editor='true']",
+      "[data-gramm='false']",
+      ".ProseMirror",
+      "[aria-multiline='true']",
+      "[data-placeholder]",
+      "[role='textbox']",
+      "textarea",
+    ].join(", ")).first();
 
-    const found = await textarea.isVisible({ timeout: 8000 }).catch(() => false);
+    const found = await textarea.isVisible({ timeout: 12000 }).catch(() => false);
     console.log("[quillbot] textarea found:", found);
-    if (!found) return fail("QuillBot: input area not found");
+    if (!found) {
+      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 400));
+      console.log("[quillbot] page snippet:", snippet);
+      return fail("QuillBot: input area not found");
+    }
 
     await fillInput(page, textarea, text);
     await page.waitForTimeout(500);
@@ -309,55 +323,61 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
   }
 }
 
-// ─── Originality.ai ──────────────────────────────────────────────────────────
+// ─── Originality.ai → Writer.com detector (free, no account) ─────────────────
+// Originality.ai requires a paid account. Writer.com has a free AI detector.
 
 async function scrapeOriginalityPage(page: Page, text: string): Promise<DetectorScore> {
   try {
-    console.log("[originality] navigating...");
-    await page.goto("https://originality.ai/ai-checker", {
+    console.log("[originality] navigating to writer.com...");
+    await page.goto("https://writer.com/ai-content-detector/", {
       waitUntil: "domcontentloaded",
       timeout: TIMEOUT,
     });
     console.log("[originality] title:", await page.title());
     await dismissCookies(page);
+    await page.waitForTimeout(1500);
 
     const textarea = page.locator(
-      "textarea, [contenteditable='true'], [role='textbox'], #content-input, [placeholder*='text' i], [placeholder*='paste' i]"
+      "textarea, [contenteditable='true'], [role='textbox'], [placeholder*='text' i], [placeholder*='paste' i], [placeholder*='enter' i]"
     ).first();
 
-    const found = await textarea.isVisible({ timeout: 8000 }).catch(() => false);
-    console.log("[originality] textarea found:", found);
-    if (!found) return fail("Originality: textarea not found");
+    const found = await textarea.isVisible({ timeout: 10000 }).catch(() => false);
+    console.log("[originality/writer] textarea found:", found);
+    if (!found) {
+      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 400));
+      console.log("[originality/writer] page snippet:", snippet);
+      return fail("Writer: textarea not found");
+    }
 
     await fillInput(page, textarea, text);
     await page.waitForTimeout(500);
 
     const scanBtn = page.locator(
-      "button:has-text('Scan'), button:has-text('Check'), button:has-text('Analyze'), button:has-text('Detect'), button[type='submit']"
+      "button:has-text('Analyze'), button:has-text('Check'), button:has-text('Detect'), button:has-text('Scan'), button[type='submit']"
     ).first();
 
     const btnFound = await scanBtn.isVisible({ timeout: 8000 }).catch(() => false);
-    console.log("[originality] scanBtn found:", btnFound);
-    if (!btnFound) return fail("Originality: scan button not found");
+    console.log("[originality/writer] scanBtn found:", btnFound);
+    if (!btnFound) return fail("Writer: scan button not found");
 
     await scanBtn.click();
-    console.log("[originality] clicked submit, waiting...");
+    console.log("[originality/writer] clicked submit, waiting...");
     await page.waitForTimeout(WAIT_FOR_RESULT + 2000);
 
     const score = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll("*"));
 
+      // Writer shows "X% AI-generated" or "X% Human-generated"
       for (const el of allEls) {
         const t = el.textContent?.trim() ?? "";
-        const aiMatch = t.match(/(\d{1,3})%\s*(?:AI|artificial)/i);
+        const aiMatch = t.match(/(\d{1,3})%\s*(?:AI|ai.generated)/i);
         if (aiMatch) return parseInt(aiMatch[1], 10);
       }
       for (const el of allEls) {
         const t = el.textContent?.trim() ?? "";
-        const origMatch = t.match(/(\d{1,3})%\s*(?:original|human)/i);
-        if (origMatch) return 100 - parseInt(origMatch[1], 10);
+        const humanMatch = t.match(/(\d{1,3})%\s*(?:human|original)/i);
+        if (humanMatch) return 100 - parseInt(humanMatch[1], 10);
       }
-
       for (const el of allEls) {
         if (el.children.length > 2) continue;
         const t = el.textContent?.trim() ?? "";
@@ -366,16 +386,16 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
       return -1;
     });
 
-    console.log("[originality] score:", score);
+    console.log("[originality/writer] score:", score);
     if (score === -1) {
       const snippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
-      console.log("[originality] page snippet:", snippet);
+      console.log("[originality/writer] page snippet:", snippet);
     }
 
-    return score === -1 ? fail("Originality: could not parse score") : { score, label: `${score}% AI` };
+    return score === -1 ? fail("Writer: could not parse score") : { score, label: `${score}% AI` };
   } catch (err) {
     console.log("[originality] error:", err instanceof Error ? err.message : String(err));
-    return fail(`Originality: ${err instanceof Error ? err.message : String(err)}`);
+    return fail(`Writer: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
