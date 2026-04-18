@@ -17,8 +17,8 @@ export interface AllScores {
   originality: DetectorScore;
 }
 
-const TIMEOUT = 40_000;
-const WAIT_FOR_RESULT = 8_000;   // ms to wait after clicking submit
+const TIMEOUT = 30_000;
+const WAIT_FOR_RESULT = 5_000;   // ms to wait after clicking submit
 
 const BROWSER_ARGS = [
   "--no-sandbox",
