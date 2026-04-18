@@ -337,65 +337,123 @@ export function rhetoricalSuppressionPass(text: string): string {
   return result;
 }
 
-// ─── Perplexity Injector ─────────────────────────────────────────────────────
-// ZeroGPT is perplexity-based. Swaps up to 3 common words per paragraph with
-// lower-frequency synonyms from a curated pool to raise per-token surprise.
-// Register-gated: formalSafe pool for academic/formal, full pool otherwise.
+// ─── Plain Language Pass (formerly Perplexity Injector) ─────────────────────
+// INVERTED from the old design. Modern AI detectors (GPTZero 4.4b "Possible AI
+// Paraphrasing") flag ornate vocabulary as an AI-paraphrased fingerprint.
+// Instead of swapping plain→fancy, we now swap fancy→plain. This destroys
+// the thesaurus-attack pattern LLMs love to generate.
+//
+// The exported name `perplexityInjector` is kept for import compatibility
+// with lib/deep-humanizer.ts.
 
-interface SynonymSwap { word: string; replacements: string[]; formalSafe: boolean; }
+// Each entry: fancy word/phrase → plain replacements.
+// Order matters: multi-word phrases first so they match before single words.
+const PLAIN_LANGUAGE_SWAPS: Array<[RegExp, string[]]> = [
+  // Multi-word purple prose — highest priority
+  [/\bcommands?\s+a\s+pervasive\s+authority\b/gi, ["dominates", "controls"]],
+  [/\bfurnish(?:es|ed|ing)?\s+(?:professionals?\s+)?with\b/gi, ["gives", "offers"]],
+  [/\ba\s+labyrinthine\s+array\s+of\b/gi, ["many", "a set of"]],
+  [/\bmultifaceted\s+tapestry\s+of\b/gi, ["a mix of", "many"]],
+  [/\bmeteoric\s+(?:progression|rise|growth)\b/gi, ["rapid growth", "fast growth"]],
+  [/\bparadigm[- ]shifting\s+leap\s+forward\b/gi, ["big change", "breakthrough"]],
+  [/\bprofoundly\s+synergistic\s+posture\b/gi, ["joint effort", "shared approach"]],
+  [/\bunyielding\s+data\s+privacy\b/gi, ["strict data privacy", "firm privacy"]],
+  [/\bstartling\s+efficiency\b/gi, ["speed", "efficiency"]],
+  [/\bcolossal\s+data\s+repositories?\b/gi, ["huge datasets", "large databases"]],
+  [/\binterrogate\s+(?:colossal\s+)?data\b/gi, ["search data", "scan data"]],
+  [/\bcellular\s+scrutiny\s+of\b/gi, ["close look at", "study of"]],
+  [/\bpervasive\s+authority\s+over\b/gi, ["strong impact on", "major role in"]],
+  [/\bdisproportionate\s+harm\s+upon\b/gi, ["unfair harm to", "extra harm to"]],
+  [/\bmarginalized\s+communities\b/gi, ["marginalized groups", "at-risk groups"]],
+  [/\bincontestably\s+broad\b/gi, ["clearly wide", "unquestionably wide"]],
+  [/\bunalterably\s+chart\b/gi, ["shape", "drive"]],
+  [/\bsophisticated\s+outputs?\b/gi, ["results", "outputs"]],
+  [/\bfoundational\s+theories?\b/gi, ["core ideas", "main ideas"]],
+  [/\badministrative\s+burden\b/gi, ["paperwork load", "admin work"]],
+  [/\bpredictive\s+analytics\s+platforms?\b/gi, ["predictive tools", "prediction systems"]],
 
-const PERPLEXITY_SWAP_POOL: SynonymSwap[] = [
-  { word: "shows",     replacements: ["illustrates", "reveals", "makes clear"],           formalSafe: true  },
-  { word: "show",      replacements: ["illustrate", "reveal", "make clear"],              formalSafe: true  },
-  { word: "shown",     replacements: ["illustrated", "borne out", "corroborated"],        formalSafe: true  },
-  { word: "uses",      replacements: ["employs", "draws on", "leverages"],                formalSafe: true  },
-  { word: "use",       replacements: ["employ", "draw on", "leverage"],                   formalSafe: true  },
-  { word: "highlight", replacements: ["underscore", "foreground", "bring into focus"],    formalSafe: true  },
-  { word: "suggest",   replacements: ["intimate", "point toward", "hint at"],             formalSafe: true  },
-  { word: "indicate",  replacements: ["signal", "attest to", "speak to"],                 formalSafe: true  },
-  { word: "examine",   replacements: ["interrogate", "probe", "unpack"],                  formalSafe: true  },
-  { word: "improve",   replacements: ["sharpen", "bolster", "refine"],                    formalSafe: true  },
-  { word: "increase",  replacements: ["amplify", "heighten", "compound"],                 formalSafe: true  },
-  { word: "reduce",    replacements: ["attenuate", "curtail", "pare down"],               formalSafe: true  },
-  { word: "address",   replacements: ["contend with", "grapple with", "take up"],         formalSafe: true  },
-  { word: "many",      replacements: ["numerous", "an array of", "a range of"],           formalSafe: true  },
-  { word: "important", replacements: ["consequential", "pivotal", "weighty"],             formalSafe: true  },
-  { word: "different", replacements: ["distinct", "divergent", "varying"],                formalSafe: true  },
-  { word: "complex",   replacements: ["multifaceted", "intricate", "layered"],            formalSafe: true  },
-  { word: "clear",     replacements: ["apparent", "discernible", "evident"],              formalSafe: true  },
-  { word: "often",     replacements: ["frequently", "in many cases", "not infrequently"], formalSafe: true  },
-  { word: "also",      replacements: ["too", "as well", "equally"],                       formalSafe: true  },
-  { word: "very",      replacements: ["considerably", "markedly", "rather"],              formalSafe: true  },
-  { word: "because",   replacements: ["given that", "insofar as", "since"],               formalSafe: true  },
-  { word: "problem",   replacements: ["difficulty", "complication", "obstacle"],          formalSafe: true  },
-  { word: "question",  replacements: ["puzzle", "quandary", "matter"],                    formalSafe: true  },
-  { word: "approach",  replacements: ["tack", "avenue", "orientation"],                   formalSafe: true  },
-  { word: "get",       replacements: ["obtain", "acquire", "land"],                       formalSafe: false },
-  { word: "good",      replacements: ["solid", "worthwhile", "capable"],                  formalSafe: false },
-  { word: "big",       replacements: ["sizeable", "outsized", "substantial"],             formalSafe: false },
-  { word: "small",     replacements: ["slim", "modest", "narrow"],                        formalSafe: false },
+  // Single-word AI-favorite verbs
+  [/\binterrogate(d|s|ing)?\b/gi, ["examine", "check", "look at"]],
+  [/\bemploy(s|ed|ing)?\b/gi, ["use", "use", "using"]],
+  [/\butiliz(e|es|ed|ing)\b/gi, ["use", "uses", "used", "using"]],
+  [/\bleverag(e|es|ed|ing)\b/gi, ["use", "uses", "used", "using"]],
+  [/\bfurnish(es|ed|ing)?\b/gi, ["give", "gives", "gave", "giving"]],
+  [/\bbolster(s|ed|ing)?\b/gi, ["boost", "boosts", "boosted", "boosting"]],
+  [/\bameliorat(e|es|ed|ing)\b/gi, ["improve", "improves", "improved", "improving"]],
+  [/\bengender(s|ed|ing)?\b/gi, ["cause", "causes", "caused", "causing"]],
+  [/\belucidat(e|es|ed|ing)\b/gi, ["explain", "explains", "explained", "explaining"]],
+  [/\battenuat(e|es|ed|ing)\b/gi, ["reduce", "reduces", "reduced", "reducing"]],
+  [/\bcurtail(s|ed|ing)?\b/gi, ["cut", "cuts", "cut", "cutting"]],
+  [/\bculminat(e|es|ed|ing)\b/gi, ["end", "ends", "ended", "ending"]],
+  [/\bunderscore(s|d)?\b/gi, ["highlight", "highlights", "highlighted"]],
+  [/\bforeground(s|ed|ing)?\b/gi, ["highlight", "highlights", "highlighted", "highlighting"]],
+  [/\bsubstantiat(e|es|ed|ing)\b/gi, ["back up", "backs up", "backed up", "backing up"]],
+  [/\bcorroborat(e|es|ed|ing)\b/gi, ["confirm", "confirms", "confirmed", "confirming"]],
+  [/\bprobe(s|d)?\b/gi, ["examine", "examines", "examined"]],
+  [/\bunpack(s|ed|ing)?\b/gi, ["explain", "explains", "explained", "explaining"]],
+  [/\bgrapple(s|d)?\s+with\b/gi, ["deal with", "deals with", "dealt with"]],
+  [/\bcontend(s|ed|ing)?\s+with\b/gi, ["face", "faces", "faced", "facing"]],
+
+  // Adjectives / adverbs
+  [/\bpervasive(ly)?\b/gi, ["widespread", "widely"]],
+  [/\bcolossal\b/gi, ["huge", "massive"]],
+  [/\blabyrinthine\b/gi, ["complex", "tangled"]],
+  [/\bunceasing(ly)?\b/gi, ["constant", "constantly"]],
+  [/\bmeteoric\b/gi, ["rapid", "fast"]],
+  [/\binsidious(ly)?\b/gi, ["subtle", "subtly", "hidden"]],
+  [/\bunyielding(ly)?\b/gi, ["firm", "firmly", "strict"]],
+  [/\bsynergistic\b/gi, ["joint", "shared"]],
+  [/\bparadigm(atic)?\b/gi, ["model", "standard"]],
+  [/\bmultifaceted\b/gi, ["complex", "many-sided"]],
+  [/\bquintessential(ly)?\b/gi, ["classic", "typical"]],
+  [/\bparamount\b/gi, ["critical", "key"]],
+  [/\bdiscernible\b/gi, ["clear", "visible"]],
+  [/\bstartling(ly)?\b/gi, ["striking", "surprising"]],
+  [/\bsophisticated\b/gi, ["advanced", "refined"]],
+  [/\bprofound(ly)?\b/gi, ["deep", "deeply"]],
+  [/\bincontestabl(e|y)\b/gi, ["clear", "clearly"]],
+  [/\bunalterabl(e|y)\b/gi, ["permanent", "permanently"]],
+  [/\bjudicious(ly)?\b/gi, ["careful", "carefully"]],
+  [/\bmaterial(ly)?\b/gi, ["real", "clearly"]],  // "materially augment" → "clearly augment" → plain
+  [/\bpivotal\b/gi, ["key", "central"]],
+  [/\bconsequential\b/gi, ["important", "major"]],
+  [/\bweighty\b/gi, ["serious", "heavy"]],
+  [/\boutsized\b/gi, ["large", "big"]],
+  [/\bsizeable\b/gi, ["large", "big"]],
+  [/\bmarked(ly)?\b/gi, ["clear", "clearly"]],
+  [/\bconsiderabl(e|y)\b/gi, ["notable", "notably"]],
+  [/\bimmensely\b/gi, ["hugely", "very"]],
+  [/\babatin[g]?\b/gi, ["slowing", "easing"]],
+  [/\bnuanced\b/gi, ["subtle", "fine"]],
+
+  // Nouns
+  [/\btapestry\s+of\b/gi, ["mix of", "set of"]],
+  [/\bconstellation\s+of\b/gi, ["group of", "set of"]],
+  [/\bpanoply\s+of\b/gi, ["wide range of", "set of"]],
+  [/\bplethora\s+of\b/gi, ["lots of", "many"]],
+  [/\bmyriad\b/gi, ["many", "countless"]],
+  [/\bpuzzle\b/gi, ["question", "problem"]],
+  [/\bquandary\b/gi, ["dilemma", "problem"]],
+  [/\bavenue\b/gi, ["path", "option"]],
+  [/\borientation\s+toward\b/gi, ["approach to"]],
+  [/\btack\b(?!\s+on)/gi, ["approach", "method"]],
 ];
 
-export function perplexityInjector(text: string, register: SourceRegister): string {
-  const isFormal = register === "academic" || register === "formal";
-  const pool = isFormal ? PERPLEXITY_SWAP_POOL.filter(s => s.formalSafe) : PERPLEXITY_SWAP_POOL;
-  return text.split(/\n\s*\n/).map((para) => {
-    let swapCount = 0;
-    let current = para;
-    for (const swap of pool) {
-      if (swapCount >= 5) break;
-      const re = new RegExp(`\\b${swap.word}\\b`, "i");
-      if (!re.test(current)) continue;
-      const idx = (current.length + swapCount) % swap.replacements.length;
-      const replacement = swap.replacements[idx];
-      current = current.replace(re, (m) =>
-        m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase()
-          ? replacement[0].toUpperCase() + replacement.slice(1) : replacement
-      );
-      swapCount++;
-    }
-    return current;
-  }).join("\n\n");
+export function perplexityInjector(text: string, _register: SourceRegister): string {
+  void _register;
+  let result = text;
+  for (const [pattern, replacements] of PLAIN_LANGUAGE_SWAPS) {
+    let i = 0;
+    result = result.replace(pattern, (match) => {
+      const rep = replacements[i % replacements.length];
+      i++;
+      // Preserve capitalization of the first character
+      return match[0] === match[0].toUpperCase() && match[0] !== match[0].toLowerCase()
+        ? rep[0].toUpperCase() + rep.slice(1)
+        : rep;
+    });
+  }
+  return result;
 }
 
 // ─── ZeroGPT N-gram Breaker ──────────────────────────────────────────────────

@@ -83,14 +83,18 @@ function buildRemutationPrompt(
   const currentWordCount = text.trim().split(/\s+/).length;
 
   const detectorGuidance: Record<string, string> = {
-    GPTZero: `GPTZero uses a language model to measure per-token perplexity and burstiness.
+    GPTZero: `GPTZero's 4.4b model flags "Possible AI Paraphrasing" — triggered by
+ornate vocabulary (interrogate, utilize, leverage, pervasive, labyrinthine,
+multifaceted, paramount, discernible, tapestry of, plethora of, etc.).
 FIX STRATEGY — do ALL of these:
+- SCRUB ornate vocabulary. Replace with plain equivalents: use, give, show,
+  cut, many, clear, key, complex, subtle, strong, path, problem.
 - Every paragraph MUST have at least one sentence under 8 words AND one over 28 words
-- Use unexpected but contextually valid word choices — uncommon collocations, vivid verbs
 - Insert em-dash asides: "The effect—worth noting here—compounds quickly"
 - Add a mid-paragraph parenthetical: "(though this varies considerably)"
 - One abrupt pivot or self-correction: "Or rather, the more accurate framing is..."
-- Mix short punchy sentences directly after long complex ones`,
+- Mix short punchy sentences directly after long complex ones
+- The shortest common word that fits is always correct.`,
 
     ZeroGPT: `ZeroGPT is n-gram and phrase pattern based.
 FIX STRATEGY — do ALL of these:
@@ -117,6 +121,24 @@ FIX STRATEGY — do ALL of these:
 - Vary argumentative rhythm — not every paragraph should follow the same pattern`,
   };
 
+  const plainLanguageMandate = `
+CRITICAL PLAIN-LANGUAGE RULE (applies to ALL detectors):
+Modern detectors specifically flag AI-paraphrased vocabulary as a fingerprint.
+NEVER use: interrogate, employ, utilize, leverage, furnish, bolster, ameliorate,
+engender, elucidate, attenuate, curtail, culminate, underscore, foreground,
+substantiate, corroborate, probe, unpack, pervasive, colossal, labyrinthine,
+unceasing, meteoric, insidious, unyielding, synergistic, paradigm/paradigmatic,
+multifaceted, quintessential, paramount, discernible, startling, sophisticated,
+profound, pivotal, consequential, weighty, nuanced, transformative, groundbreaking,
+tapestry of, constellation of, panoply of, plethora of, myriad, quandary,
+"navigate the complexities of", "commands a pervasive authority".
+USE INSTEAD: use, give, show, cut, many, clear, key, complex, fast, wide,
+subtle, strict, approach, question, problem, path.
+The shortest common word that fits is always correct.
+Preserve technical domain terms (medical, scientific, legal) — only ornate
+GENERAL-PURPOSE vocabulary is banned.
+`;
+
   const isFormal = register === "academic" || register === "formal";
   const registerNote = isFormal
     ? `REGISTER: Formal/academic. No contractions. No casual language. Preserve academic vocabulary.`
@@ -128,6 +150,8 @@ ${scoreLines}
 WORST DETECTOR: ${worst} — fix this first.
 
 ${detectorGuidance[worst] ?? detectorGuidance.GPTZero}
+
+${plainLanguageMandate}
 
 ${registerNote}
 
