@@ -1,6 +1,9 @@
 // ─── Multi-Detector Deep Humanize Loop ───────────────────────────────────────
-// Runs base humanize(), then iteratively scores against ALL 4 detectors and
-// re-mutates targeting the worst scorer. Only runs on Railway (needs Playwright).
+// Runs base humanize(), then iteratively scores against ALL 4 detectors.
+// Uses TARGETED SURGERY: extracts flagged sentences from each detector,
+// rewrites only those sentences, splices back. Falls back to full-text
+// re-mutation if no flagged sentences available.
+// Emits live events via onEvent callback (for SSE streaming to client).
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
@@ -24,7 +27,33 @@ export interface DeepHumanizeResult {
   scoreHistory: AllScores[];
 }
 
-// ─── Gemini Pro caller ────────────────────────────────────────────────────────
+export type DeepEvent =
+  | { type: "status"; message: string }
+  | { type: "score"; iteration: number; scores: AllScores; bestCombined: number }
+  | { type: "result"; text: string; finalScores: AllScores; iterations: number; scoreHistory: AllScores[] }
+  | { type: "error"; message: string };
+
+export type EventEmitter = (event: DeepEvent) => void;
+
+// ─── Banned vocab (mirrors prompts/pipeline.ts) ──────────────────────────────
+
+const BANNED_VOCAB_PROMPT = `
+CRITICAL PLAIN-LANGUAGE RULE:
+NEVER use these AI-paraphrased words: interrogate, employ, utilize, leverage,
+furnish, bolster, ameliorate, engender, elucidate, attenuate, curtail,
+culminate, underscore, foreground, substantiate, corroborate, probe, unpack,
+pervasive, colossal, labyrinthine, unceasing, meteoric, insidious, unyielding,
+synergistic, paradigm, multifaceted, quintessential, paramount, discernible,
+startling, sophisticated, profound, pivotal, consequential, weighty, nuanced,
+transformative, groundbreaking, tapestry of, constellation of, plethora of,
+myriad, quandary, "navigate the complexities of".
+
+USE INSTEAD: use, give, show, cut, many, clear, key, complex, fast, wide,
+subtle, approach, question, problem, path. The shortest common word that fits
+is always correct. Preserve technical domain terms (medical, scientific, legal).
+`;
+
+// ─── Gemini callers ──────────────────────────────────────────────────────────
 
 async function callGeminiPro(prompt: string): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -40,7 +69,21 @@ async function callGeminiPro(prompt: string): Promise<string> {
   return result.response.text().trim();
 }
 
-// ─── Score utilities ──────────────────────────────────────────────────────────
+async function callGeminiFlash(prompt: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: { temperature: 0.92, topP: 0.95, maxOutputTokens: 2048 },
+  });
+
+  const result = await model.generateContent(prompt);
+  return result.response.text().trim();
+}
+
+// ─── Score utilities ─────────────────────────────────────────────────────────
 
 function getValidScores(scores: AllScores): { name: string; score: number }[] {
   return [
@@ -67,9 +110,140 @@ function worstDetector(scores: AllScores): string {
   return valid.reduce((a, b) => (a.score >= b.score ? a : b)).name;
 }
 
-// ─── Targeted re-mutation prompts ────────────────────────────────────────────
+// ─── Detector-specific sentence rewrite prompts ──────────────────────────────
 
-function buildRemutationPrompt(
+const DETECTOR_STRATEGIES: Record<string, string> = {
+  GPTZero: `GPTZero's 4.4b model flagged this as "Possible AI Paraphrasing".
+FIX: Scrub ornate vocabulary. Add an em-dash aside or parenthetical.
+Vary sentence length — make it noticeably shorter OR longer than neighbors.
+Change the opening word.`,
+
+  ZeroGPT: `ZeroGPT flagged this sentence as AI based on phrase patterns.
+FIX: Remove any signpost phrases (furthermore, moreover, in conclusion, it is important).
+Rewrite with a distinct syntactic structure.
+Use active voice. Change the opening word.`,
+
+  QuillBot: `QuillBot flagged this as AI-refined text.
+FIX: Break the claim-support-conclusion pattern.
+Use a different clause structure (relative clause, participial phrase, or fragment).
+Inject a specific detail or observation.`,
+
+  Originality: `Originality.ai's deep model flagged this as AI.
+FIX: Restructure completely. Change voice (passive↔active).
+Replace abstract claims with concrete specifics.
+Add a human voice marker (honestly, in practice, as a rule).`,
+};
+
+// ─── Fuzzy sentence matching + splicing ──────────────────────────────────────
+
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+}
+
+function findSentenceInText(text: string, target: string): { start: number; end: number } | null {
+  // 1. Exact match
+  const exactIdx = text.indexOf(target);
+  if (exactIdx !== -1) return { start: exactIdx, end: exactIdx + target.length };
+
+  // 2. Normalized comparison — walk through text sentences
+  const targetNorm = normalize(target);
+  if (targetNorm.length < 20) return null;
+
+  // Split text into sentence-like chunks
+  const sentencePattern = /[^.!?]+[.!?]+/g;
+  let match;
+  while ((match = sentencePattern.exec(text)) !== null) {
+    const chunk = match[0];
+    const chunkNorm = normalize(chunk);
+    if (chunkNorm === targetNorm) {
+      return { start: match.index, end: match.index + chunk.length };
+    }
+    // Fuzzy: target is contained in chunk or vice versa (at least 80% overlap)
+    if (chunkNorm.length > targetNorm.length * 0.8 &&
+        chunkNorm.length < targetNorm.length * 1.3) {
+      const overlap = longestCommonSubstring(chunkNorm, targetNorm);
+      if (overlap >= Math.min(chunkNorm.length, targetNorm.length) * 0.75) {
+        return { start: match.index, end: match.index + chunk.length };
+      }
+    }
+  }
+
+  return null;
+}
+
+function longestCommonSubstring(a: string, b: string): number {
+  if (!a.length || !b.length) return 0;
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  let max = 0;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i-1] === b[j-1]) {
+        dp[i][j] = dp[i-1][j-1] + 1;
+        if (dp[i][j] > max) max = dp[i][j];
+      }
+    }
+  }
+  return max;
+}
+
+function spliceSentence(text: string, target: string, replacement: string): string | null {
+  const loc = findSentenceInText(text, target);
+  if (!loc) return null;
+  return text.slice(0, loc.start) + replacement + text.slice(loc.end);
+}
+
+// ─── Flagged sentence rewrite ────────────────────────────────────────────────
+
+async function rewriteFlaggedSentence(
+  sentence: string,
+  surroundingContext: string,
+  detectorName: string,
+  register: SourceRegister,
+): Promise<string> {
+  const strategy = DETECTOR_STRATEGIES[detectorName] ?? DETECTOR_STRATEGIES.GPTZero;
+
+  const isFormal = register === "academic" || register === "formal";
+  const registerNote = isFormal
+    ? "REGISTER: Formal/academic. No contractions. No slang. Plain academic vocabulary only."
+    : "REGISTER: Natural educated voice. Contractions welcome. Plain everyday vocabulary.";
+
+  const prompt = `You are rewriting a single sentence flagged as AI by ${detectorName}.
+
+${strategy}
+
+${registerNote}
+
+${BANNED_VOCAB_PROMPT}
+
+CONTEXT (surrounding paragraph — for meaning preservation, NOT for rewriting):
+"""
+${surroundingContext}
+"""
+
+SENTENCE TO REWRITE:
+"""
+${sentence}
+"""
+
+REQUIREMENTS:
+- Preserve the exact meaning — no added or removed facts
+- Output ONE rewritten sentence ONLY
+- No preamble, no quotes, no commentary
+- Should flow naturally where the original sat
+
+REWRITTEN SENTENCE:`;
+
+  const result = await callGeminiFlash(prompt);
+  // Clean up: remove quotes, preambles
+  return result
+    .replace(/^["'`]|["'`]$/g, "")
+    .replace(/^(Here(?:'s| is).*?:|Rewritten sentence:|Sentence:)\s*/i, "")
+    .trim();
+}
+
+// ─── Full-text fallback re-mutation ──────────────────────────────────────────
+
+function buildFullTextRemutationPrompt(
   text: string,
   scores: AllScores,
   worst: string,
@@ -81,135 +255,104 @@ function buildRemutationPrompt(
     .join("\n");
 
   const currentWordCount = text.trim().split(/\s+/).length;
-
-  const detectorGuidance: Record<string, string> = {
-    GPTZero: `GPTZero's 4.4b model flags "Possible AI Paraphrasing" — triggered by
-ornate vocabulary (interrogate, utilize, leverage, pervasive, labyrinthine,
-multifaceted, paramount, discernible, tapestry of, plethora of, etc.).
-FIX STRATEGY — do ALL of these:
-- SCRUB ornate vocabulary. Replace with plain equivalents: use, give, show,
-  cut, many, clear, key, complex, subtle, strong, path, problem.
-- Every paragraph MUST have at least one sentence under 8 words AND one over 28 words
-- Insert em-dash asides: "The effect—worth noting here—compounds quickly"
-- Add a mid-paragraph parenthetical: "(though this varies considerably)"
-- One abrupt pivot or self-correction: "Or rather, the more accurate framing is..."
-- Mix short punchy sentences directly after long complex ones
-- The shortest common word that fits is always correct.`,
-
-    ZeroGPT: `ZeroGPT is n-gram and phrase pattern based.
-FIX STRATEGY — do ALL of these:
-- Remove ALL AI signpost phrases: "furthermore", "moreover", "in conclusion", "it is important", "it is worth noting"
-- No two consecutive sentences can start with the same word or same syntactic structure
-- Replace every passive construction with active voice
-- Replace at least 3 abstract claims with specific, concrete versions
-- Make transitions between ideas feel earned, not formulaic`,
-
-    QuillBot: `QuillBot AI detector flags phrase-level AI patterns.
-FIX STRATEGY — do ALL of these:
-- Break every "claim → support → conclusion" sentence pattern
-- Mix clause types aggressively: relative clauses, participial phrases, appositives, fragments
-- Start at least one paragraph with something other than a topic sentence
-- Replace smooth transitions with more abrupt or unexpected pivots
-- One sentence should feel like an observation the writer just had, not a prepared point`,
-
-    Originality: `Originality.ai uses a deep model trained on LLM outputs.
-FIX STRATEGY — do ALL of these:
-- Restructure 2+ paragraphs so their internal argument flow differs from input
-- Use unusual but valid word combinations — "the data bristles with", "the gap yawns"
-- Add hedges that sound like human uncertainty: "at least in most cases", "though I'd argue"
-- Drop formality briefly in one clause even in academic text
-- Vary argumentative rhythm — not every paragraph should follow the same pattern`,
-  };
-
-  const plainLanguageMandate = `
-CRITICAL PLAIN-LANGUAGE RULE (applies to ALL detectors):
-Modern detectors specifically flag AI-paraphrased vocabulary as a fingerprint.
-NEVER use: interrogate, employ, utilize, leverage, furnish, bolster, ameliorate,
-engender, elucidate, attenuate, curtail, culminate, underscore, foreground,
-substantiate, corroborate, probe, unpack, pervasive, colossal, labyrinthine,
-unceasing, meteoric, insidious, unyielding, synergistic, paradigm/paradigmatic,
-multifaceted, quintessential, paramount, discernible, startling, sophisticated,
-profound, pivotal, consequential, weighty, nuanced, transformative, groundbreaking,
-tapestry of, constellation of, panoply of, plethora of, myriad, quandary,
-"navigate the complexities of", "commands a pervasive authority".
-USE INSTEAD: use, give, show, cut, many, clear, key, complex, fast, wide,
-subtle, strict, approach, question, problem, path.
-The shortest common word that fits is always correct.
-Preserve technical domain terms (medical, scientific, legal) — only ornate
-GENERAL-PURPOSE vocabulary is banned.
-`;
+  const strategy = DETECTOR_STRATEGIES[worst] ?? DETECTOR_STRATEGIES.GPTZero;
 
   const isFormal = register === "academic" || register === "formal";
   const registerNote = isFormal
-    ? `REGISTER: Formal/academic. No contractions. No casual language. Preserve academic vocabulary.`
-    : `REGISTER: Natural educated voice. Contractions and conversational phrasing are welcome.`;
+    ? "REGISTER: Formal/academic. No contractions. No slang."
+    : "REGISTER: Natural educated voice. Contractions welcome.";
 
   return `You are rewriting text to defeat AI detectors. Current scores:
 ${scoreLines}
 
 WORST DETECTOR: ${worst} — fix this first.
 
-${detectorGuidance[worst] ?? detectorGuidance.GPTZero}
+${strategy}
 
-${plainLanguageMandate}
+${BANNED_VOCAB_PROMPT}
 
 ${registerNote}
+
+STRUCTURAL CHANGES — do ALL of these:
+- Every paragraph MUST contain one sentence under 9 words AND one over 28 words
+- Gap between shortest and longest sentence ≥ 18 words per paragraph
+- No two consecutive sentences can start with the same word
+- Break at least one compound sentence into two; merge at least two short ones
+- Add one parenthetical aside (commas or em-dashes) per paragraph
+- Replace any abstract claim with a concrete specific where natural
 
 WORD COUNT — CRITICAL:
 Current text: ${currentWordCount} words.
 Target: ${targetWordCount} words (±5%).
-If your output is shorter than ${Math.round(targetWordCount * 0.95)} words, expand sentences with relevant detail. Do NOT truncate content.
 
 ABSOLUTE RULES:
-- Preserve ALL factual content and meaning exactly
-- No asterisks, headers, bullets, or markdown formatting
-- No new facts or invented content
-- Output ONLY the rewritten text — no preamble, no commentary
+- Preserve ALL factual content exactly
+- No asterisks, headers, bullets, or markdown
+- Output ONLY the rewritten text — no preamble
 
 TEXT:
 ${text}`;
 }
 
-// ─── Full deterministic cleanup after each re-mutation ───────────────────────
-// Re-applies every detector-specific pass so re-mutations don't undo prior gains
+// ─── Post-mutation cleanup passes ────────────────────────────────────────────
 
 function applyDeterministicPasses(text: string, register: SourceRegister): string {
   let result = text
-    // Kill residual AI connectors at paragraph starts
     .replace(/^(Furthermore|Moreover|Additionally|Consequently|In conclusion|It is important to note that|It is worth noting that|Importantly|Interestingly),?\s*/gim, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   result = antiPatternPass(result, register);
   result = rhetoricalSuppressionPass(result);
-  result = zeroGPTNgramBreaker(result);          // Always — prevents ZeroGPT regression
+  result = zeroGPTNgramBreaker(result);
   result = perplexityInjector(result, register);
   result = burstinessInjector(result, register);
   result = openerDiversityPass(result);
   return result;
 }
 
-// ─── Word count expansion if LLM compressed ──────────────────────────────────
+// ─── Helpers to extract & dedup flagged sentences ────────────────────────────
 
-async function expandIfShort(text: string, targetWords: number): Promise<string> {
-  const currentWords = text.trim().split(/\s+/).length;
-  if (currentWords >= Math.round(targetWords * 0.88)) return text; // Within range
+function collectFlaggedSentences(scores: AllScores): Array<{ sentence: string; detectors: string[] }> {
+  const map = new Map<string, Set<string>>();  // normalized sentence → set of detectors
 
-  const expandPrompt = `The following text is ${currentWords} words but needs to be approximately ${targetWords} words.
-Expand it by adding relevant elaboration, concrete examples, or supporting detail within the existing sentences and paragraphs.
-Do NOT add new sections, new arguments, or change any facts.
-Preserve the exact register and style.
-Output only the expanded text.
+  const addFrom = (detector: string, sentences: string[]) => {
+    for (const s of sentences) {
+      const norm = normalize(s);
+      if (norm.length < 20) continue;
+      if (!map.has(norm)) map.set(norm, new Set());
+      map.get(norm)!.add(detector);
+      // Store original form as the key marker
+      map.get(norm)!.add(`__orig:${s}`);
+    }
+  };
 
-TEXT:
-${text}`;
+  addFrom("GPTZero", scores.gptzero.flaggedSentences);
+  addFrom("ZeroGPT", scores.zerogpt.flaggedSentences);
+  addFrom("QuillBot", scores.quillbot.flaggedSentences);
+  addFrom("Originality", scores.originality.flaggedSentences);
 
-  try {
-    const expanded = await callGeminiPro(expandPrompt);
-    return expanded.trim().length > currentWords * 4 ? text : (expanded.trim() || text);
-  } catch {
-    return text;
+  const results: Array<{ sentence: string; detectors: string[] }> = [];
+  for (const [, tags] of map) {
+    const origMarker = Array.from(tags).find(t => t.startsWith("__orig:"));
+    const detectors = Array.from(tags).filter(t => !t.startsWith("__orig:"));
+    if (origMarker && detectors.length > 0) {
+      results.push({ sentence: origMarker.slice(7), detectors });
+    }
   }
+
+  // Prioritize sentences flagged by multiple detectors
+  results.sort((a, b) => b.detectors.length - a.detectors.length);
+  return results;
+}
+
+function getSurroundingContext(text: string, sentence: string): string {
+  const loc = findSentenceInText(text, sentence);
+  if (!loc) return sentence;
+  // Grab ~200 chars before and after
+  const start = Math.max(0, loc.start - 200);
+  const end = Math.min(text.length, loc.end + 200);
+  return text.slice(start, end);
 }
 
 // ─── Main deep humanize function ─────────────────────────────────────────────
@@ -218,70 +361,144 @@ export async function humanizeDeep(
   inputText: string,
   contentType: ContentType,
   wordLimit: number,
-  options: { threshold?: number; maxIterations?: number } = {}
+  options: { threshold?: number; maxIterations?: number } = {},
+  onEvent: EventEmitter = () => {}
 ): Promise<DeepHumanizeResult> {
-  const { threshold = 15, maxIterations = 3 } = options;
+  const { threshold = 5, maxIterations = 6 } = options;
   const register = classifyRegister(inputText);
   const originalWordCount = inputText.trim().split(/\s+/).length;
   const targetWordCount = Math.min(originalWordCount, wordLimit);
 
-  // Step 1: Base humanize (handles structural + semantic + deterministic passes)
+  onEvent({ type: "status", message: "Running base humanization pipeline..." });
   let current = await humanize(inputText, contentType, wordLimit);
 
   const scoreHistory: AllScores[] = [];
-  let best: { text: string; combined: number } = { text: current, combined: 100 };
+  let best: { text: string; combined: number; scores: AllScores | null } = {
+    text: current,
+    combined: 100,
+    scores: null,
+  };
 
   for (let iter = 0; iter < maxIterations; iter++) {
-    // Step 2: Score all 4 detectors in parallel (shared browser, 4 tabs)
+    onEvent({
+      type: "status",
+      message: `Round ${iter + 1}/${maxIterations}: scoring against all 4 detectors...`,
+    });
+
     const scores = await scoreAllDetectors(current);
     scoreHistory.push(scores);
 
     const max = maxScore(scores);
     const avg = combinedScore(scores);
 
-    // Track best version by combined average score
     if (avg < best.combined) {
-      best = { text: current, combined: avg };
+      best = { text: current, combined: avg, scores };
     }
+
+    onEvent({ type: "score", iteration: iter + 1, scores, bestCombined: best.combined });
 
     console.log(`[deep iter ${iter + 1}] max=${max} avg=${avg.toFixed(0)} words=${current.split(/\s+/).length}`);
 
-    // Done if all valid detectors below threshold
-    if (max !== -1 && max <= threshold) break;
+    // Done if all valid detectors ≤ threshold
+    if (max !== -1 && max <= threshold) {
+      onEvent({ type: "status", message: `All detectors ≤ ${threshold}% — done.` });
+      break;
+    }
 
-    // Last iteration — stop here
+    // Last iteration — no more work
     if (iter === maxIterations - 1) break;
 
-    // Step 3: Build targeted re-mutation prompt for worst detector
+    // ── TARGETED SURGERY: rewrite only flagged sentences ────────────────────
+    const flagged = collectFlaggedSentences(scores);
     const worst = worstDetector(scores);
-    const currentWordCount = current.trim().split(/\s+/).length;
-    // Aim for the greater of original target or what we currently have
-    const aim = Math.max(targetWordCount, Math.round(currentWordCount * 0.97));
-    const prompt = buildRemutationPrompt(current, scores, worst, register, aim);
 
-    // Step 4: Strong model re-mutation
-    const remutated = await callGeminiPro(prompt);
-    if (!remutated || remutated.trim().length < 50) continue;
+    if (flagged.length > 0) {
+      onEvent({
+        type: "status",
+        message: `Found ${flagged.length} flagged sentence${flagged.length === 1 ? "" : "s"} — rewriting each...`,
+      });
 
-    // Step 5: Expand if LLM compressed too much
-    const expanded = await expandIfShort(remutated.trim(), aim);
+      let rewritten = current;
+      let spliceCount = 0;
 
-    // Step 6: Re-apply full deterministic pipeline
-    // This prevents each re-mutation from undoing ZeroGPT/QuillBot gains
-    current = applyDeterministicPasses(expanded, register);
+      for (let i = 0; i < Math.min(flagged.length, 8); i++) {
+        const { sentence, detectors } = flagged[i];
+        const targetDetector = detectors[0] ?? worst;
+        const context = getSurroundingContext(rewritten, sentence);
+
+        try {
+          const newSentence = await rewriteFlaggedSentence(sentence, context, targetDetector, register);
+          if (newSentence && newSentence.length > 10) {
+            const spliced = spliceSentence(rewritten, sentence, newSentence);
+            if (spliced) {
+              rewritten = spliced;
+              spliceCount++;
+            }
+          }
+        } catch (err) {
+          console.log(`[deep surgery] rewrite failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      onEvent({
+        type: "status",
+        message: `Spliced ${spliceCount} rewritten sentences. Cleaning up...`,
+      });
+
+      current = applyDeterministicPasses(rewritten, register);
+    } else {
+      // ── FALLBACK: full-text re-mutation ────────────────────────────────────
+      onEvent({
+        type: "status",
+        message: `No flagged sentences extractable — targeting ${worst} (${scores[worstDetectorKey(worst)]?.score ?? 0}%) with full rewrite...`,
+      });
+
+      const currentWordCount = current.trim().split(/\s+/).length;
+      const aim = Math.max(targetWordCount, Math.round(currentWordCount * 0.97));
+      const prompt = buildFullTextRemutationPrompt(current, scores, worst, register, aim);
+
+      try {
+        const remutated = await callGeminiPro(prompt);
+        if (remutated && remutated.trim().length > 50) {
+          current = applyDeterministicPasses(remutated.trim(), register);
+        }
+      } catch (err) {
+        console.log(`[deep full-mutation] failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
-  const finalScores = scoreHistory[scoreHistory.length - 1] ?? {
-    gptzero: { score: -1, label: "skipped" },
-    zerogpt: { score: -1, label: "skipped" },
-    quillbot: { score: -1, label: "skipped" },
-    originality: { score: -1, label: "skipped" },
+  const finalScores = best.scores ?? scoreHistory[scoreHistory.length - 1] ?? {
+    gptzero: { score: -1, label: "skipped", flaggedSentences: [] },
+    zerogpt: { score: -1, label: "skipped", flaggedSentences: [] },
+    quillbot: { score: -1, label: "skipped", flaggedSentences: [] },
+    originality: { score: -1, label: "skipped", flaggedSentences: [] },
   };
 
-  return {
+  const result: DeepHumanizeResult = {
     text: best.text,
     finalScores,
     iterations: scoreHistory.length,
     scoreHistory,
   };
+
+  onEvent({
+    type: "result",
+    text: result.text,
+    finalScores: result.finalScores,
+    iterations: result.iterations,
+    scoreHistory: result.scoreHistory,
+  });
+
+  return result;
+}
+
+function worstDetectorKey(name: string): keyof AllScores {
+  const map: Record<string, keyof AllScores> = {
+    GPTZero: "gptzero",
+    ZeroGPT: "zerogpt",
+    QuillBot: "quillbot",
+    Originality: "originality",
+  };
+  return map[name] ?? "gptzero";
 }

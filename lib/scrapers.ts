@@ -1,6 +1,8 @@
 // ─── Multi-Detector Scraper ──────────────────────────────────────────────────
 // Opens ONE browser, runs all 4 detectors in parallel tabs (one context each).
 // Each context gets a realistic user-agent to avoid bot detection.
+// Each scraper returns the overall score AND any sentences the detector
+// flagged as AI — used for targeted surgical re-humanization.
 
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
@@ -8,6 +10,7 @@ export interface DetectorScore {
   score: number;   // 0–100 (% AI), -1 if scraper failed
   label: string;
   error?: string;
+  flaggedSentences: string[];  // sentences the detector highlighted as AI
 }
 
 export interface AllScores {
@@ -18,7 +21,7 @@ export interface AllScores {
 }
 
 const TIMEOUT = 30_000;
-const WAIT_FOR_RESULT = 5_000;   // ms to wait after clicking submit
+const WAIT_FOR_RESULT = 6_000;   // ms to wait after clicking submit
 
 const BROWSER_ARGS = [
   "--no-sandbox",
@@ -44,7 +47,6 @@ async function newStealthContext(browser: Browser): Promise<BrowserContext> {
       "Accept-Language": "en-US,en;q=0.9",
     },
   });
-  // Remove webdriver flag
   await ctx.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
     Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3] });
@@ -65,28 +67,20 @@ async function dismissCookies(page: Page): Promise<void> {
   } catch { /* ignore */ }
 }
 
-// Try fill() first, fall back to click+selectAll+type for React/custom inputs
 async function fillInput(page: Page, locator: import("playwright").Locator, text: string): Promise<void> {
   try {
     await locator.click({ timeout: 8000 });
     await locator.fill(text, { timeout: 8000 });
   } catch {
-    // fallback: type character-by-character (slower but works with more sites)
     try {
       await locator.click({ timeout: 5000 });
-      await page.keyboard.type(text.slice(0, 800), { delay: 0 }); // type first 800 chars max
+      await page.keyboard.type(text.slice(0, 800), { delay: 0 });
     } catch { /* ignore */ }
   }
 }
 
 function fail(error: string): DetectorScore {
-  return { score: -1, label: "error", error };
-}
-
-// Extract first percentage from a string
-function extractPercent(text: string): number {
-  const match = text.match(/(\d{1,3})(?:\.\d+)?\s*%/);
-  return match ? Math.round(parseFloat(match[1])) : -1;
+  return { score: -1, label: "error", error, flaggedSentences: [] };
 }
 
 // ─── GPTZero ─────────────────────────────────────────────────────────────────
@@ -98,7 +92,6 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
     console.log("[gptzero] title:", await page.title());
     await dismissCookies(page);
 
-    // GPTZero has a large textarea on the main page
     const textarea = page.locator(
       "textarea, [contenteditable='true'], [role='textbox'], [data-testid='text-input']"
     ).first();
@@ -110,7 +103,6 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
     await fillInput(page, textarea, text);
     await page.waitForTimeout(500);
 
-    // Find and click the check button
     const checkBtn = page.locator(
       "button:has-text('Check Origin'), button:has-text('Check for AI'), button:has-text('Check'), button:has-text('Analyze'), button[type='submit']"
     ).first();
@@ -123,13 +115,10 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
     console.log("[gptzero] clicked submit, waiting for result...");
     await page.waitForTimeout(WAIT_FOR_RESULT);
 
-    // Parse score from page
     const score = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll("*"));
-
-      // Look for elements showing "X% AI" or just "X%"
       for (const el of allEls) {
-        if (el.children.length > 3) continue; // skip containers
+        if (el.children.length > 3) continue;
         const t = el.textContent?.trim() ?? "";
         if (/^\d{1,3}%$/.test(t)) {
           const n = parseInt(t, 10);
@@ -138,8 +127,6 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
         const aiMatch = t.match(/(\d{1,3})%\s*(?:AI|ai)/);
         if (aiMatch) return parseInt(aiMatch[1], 10);
       }
-
-      // data attribute fallback
       for (const el of allEls) {
         const v = el.getAttribute("data-score") ?? el.getAttribute("data-ai-score") ?? el.getAttribute("data-ai");
         if (v !== null) {
@@ -147,18 +134,41 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
           if (!isNaN(n)) return Math.round(n <= 1 ? n * 100 : n);
         }
       }
-
       return -1;
     });
 
-    console.log("[gptzero] score:", score);
-    if (score === -1) {
-      // Log page content snippet for debugging
-      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
-      console.log("[gptzero] page snippet:", snippet);
-    }
+    // Extract flagged sentences — GPTZero highlights AI sentences with specific classes
+    const flaggedSentences = await page.evaluate(() => {
+      const results: string[] = [];
+      // Strategy 1: elements with AI-indicator classes
+      const cssSelectors = [
+        '[class*="sentence-ai"]',
+        '[class*="ai-sentence"]',
+        '[class*="highlight"]',
+        '[class*="aiSentence"]',
+        '[class*="detected"]',
+        '[data-ai="true"]',
+        '[data-result="ai"]',
+        'span[style*="background-color"]',
+        'span[style*="background:"]',
+        'mark',
+      ];
+      for (const sel of cssSelectors) {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
+          const t = el.textContent?.trim() ?? "";
+          if (t.length > 20 && t.length < 600) results.push(t);
+        }
+      }
+      // Dedup
+      return Array.from(new Set(results)).slice(0, 15);
+    });
 
-    return score === -1 ? fail("GPTZero: could not parse score") : { score, label: `${score}% AI` };
+    console.log("[gptzero] score:", score, "flagged:", flaggedSentences.length);
+
+    return score === -1
+      ? fail("GPTZero: could not parse score")
+      : { score, label: `${score}% AI`, flaggedSentences };
   } catch (err) {
     console.log("[gptzero] error:", err instanceof Error ? err.message : String(err));
     return fail(`GPTZero: ${err instanceof Error ? err.message : String(err)}`);
@@ -199,22 +209,16 @@ async function scrapeZeroGPTPage(page: Page, text: string): Promise<DetectorScor
 
     const score = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll("*"));
-
-      // ZeroGPT shows "X% AI GPT" or "Your text is X% AI"
       for (const el of allEls) {
         const t = el.textContent?.trim() ?? "";
         const m = t.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*(?:AI|GPT|generated)/i);
         if (m) return Math.round(parseFloat(m[1]));
       }
-
-      // Fallback: any standalone percentage in result area
       const resultArea = document.querySelector("[class*='result' i], [class*='score' i], [id*='result' i]");
       if (resultArea) {
         const m = resultArea.textContent?.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
         if (m) return Math.round(parseFloat(m[1]));
       }
-
-      // Last resort: any clean percentage element
       for (const el of allEls) {
         if (el.children.length > 2) continue;
         const t = el.textContent?.trim() ?? "";
@@ -223,13 +227,38 @@ async function scrapeZeroGPTPage(page: Page, text: string): Promise<DetectorScor
       return -1;
     });
 
-    console.log("[zerogpt] score:", score);
-    if (score === -1) {
-      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
-      console.log("[zerogpt] page snippet:", snippet);
-    }
+    // ZeroGPT highlights AI sentences in yellow — extract those
+    const flaggedSentences = await page.evaluate(() => {
+      const results: string[] = [];
+      const cssSelectors = [
+        'mark',
+        '[style*="background-color: yellow"]',
+        '[style*="background-color:yellow"]',
+        '[style*="background: yellow"]',
+        '[style*="background:yellow"]',
+        '[style*="rgb(255, 255, 0)"]',
+        '[style*="rgb(255,255,0)"]',
+        '[style*="#ffff"]',
+        '[style*="#FFFF"]',
+        '[class*="highlight"]',
+        '[class*="flagged"]',
+        '[class*="ai-text"]',
+      ];
+      for (const sel of cssSelectors) {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
+          const t = el.textContent?.trim() ?? "";
+          if (t.length > 20 && t.length < 600) results.push(t);
+        }
+      }
+      return Array.from(new Set(results)).slice(0, 15);
+    });
 
-    return score === -1 ? fail("ZeroGPT: could not parse score") : { score, label: `${score}% AI` };
+    console.log("[zerogpt] score:", score, "flagged:", flaggedSentences.length);
+
+    return score === -1
+      ? fail("ZeroGPT: could not parse score")
+      : { score, label: `${score}% AI`, flaggedSentences };
   } catch (err) {
     console.log("[zerogpt] error:", err instanceof Error ? err.message : String(err));
     return fail(`ZeroGPT: ${err instanceof Error ? err.message : String(err)}`);
@@ -242,14 +271,13 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
   try {
     console.log("[quillbot] navigating...");
     await page.goto("https://quillbot.com/ai-content-detector", {
-      waitUntil: "networkidle",   // wait for JS to finish loading the editor
+      waitUntil: "domcontentloaded",
       timeout: TIMEOUT,
     });
     console.log("[quillbot] title:", await page.title());
     await dismissCookies(page);
-    await page.waitForTimeout(2000); // extra wait for React hydration
+    await page.waitForTimeout(2500);  // React hydration
 
-    // QuillBot uses a ProseMirror/Quill editor — try many selectors
     const textarea = page.locator([
       ".ql-editor",
       "[contenteditable='true']",
@@ -265,8 +293,6 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
     const found = await textarea.isVisible({ timeout: 12000 }).catch(() => false);
     console.log("[quillbot] textarea found:", found);
     if (!found) {
-      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 400));
-      console.log("[quillbot] page snippet:", snippet);
       return fail("QuillBot: input area not found");
     }
 
@@ -287,8 +313,6 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
 
     const score = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll("*"));
-
-      // QuillBot shows "X% AI Content" or "X% Human Content"
       for (const el of allEls) {
         const t = el.textContent?.trim() ?? "";
         const aiMatch = t.match(/(\d{1,3})%\s*AI/i);
@@ -299,32 +323,52 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
         const humanMatch = t.match(/(\d{1,3})%\s*Human/i);
         if (humanMatch) return 100 - parseInt(humanMatch[1], 10);
       }
-
-      // Result container fallback
       const resultArea = document.querySelector("[class*='result' i], [class*='score' i], [class*='detection' i]");
       if (resultArea) {
         const m = resultArea.textContent?.match(/(\d{1,3})%/);
         if (m) return parseInt(m[1], 10);
       }
-
       return -1;
     });
 
-    console.log("[quillbot] score:", score);
-    if (score === -1) {
-      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
-      console.log("[quillbot] page snippet:", snippet);
-    }
+    // QuillBot shows "Main AI Contributors" section with flagged excerpts
+    const flaggedSentences = await page.evaluate(() => {
+      const results: string[] = [];
+      // Look for contributor cards / highlighted sections
+      const sectionSelectors = [
+        '[class*="contributor" i]',
+        '[class*="ai-refined" i]',
+        '[class*="ai-generated" i]',
+        '[class*="highlight"]',
+        '[class*="flagged"]',
+        'mark',
+        '[style*="background-color"]',
+      ];
+      for (const sel of sectionSelectors) {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
+          const t = el.textContent?.trim() ?? "";
+          // Skip if it looks like a label (too short) or the full text (too long)
+          if (t.length > 30 && t.length < 500 && !/^(AI|Human|Main|Contributors)/i.test(t)) {
+            results.push(t);
+          }
+        }
+      }
+      return Array.from(new Set(results)).slice(0, 10);
+    });
 
-    return score === -1 ? fail("QuillBot: could not parse score") : { score, label: `${score}% AI` };
+    console.log("[quillbot] score:", score, "flagged:", flaggedSentences.length);
+
+    return score === -1
+      ? fail("QuillBot: could not parse score")
+      : { score, label: `${score}% AI`, flaggedSentences };
   } catch (err) {
     console.log("[quillbot] error:", err instanceof Error ? err.message : String(err));
     return fail(`QuillBot: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
-// ─── Originality.ai → Writer.com detector (free, no account) ─────────────────
-// Originality.ai requires a paid account. Writer.com has a free AI detector.
+// ─── Originality → Writer.com detector (free, no account) ────────────────────
 
 async function scrapeOriginalityPage(page: Page, text: string): Promise<DetectorScore> {
   try {
@@ -344,8 +388,6 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
     const found = await textarea.isVisible({ timeout: 10000 }).catch(() => false);
     console.log("[originality/writer] textarea found:", found);
     if (!found) {
-      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 400));
-      console.log("[originality/writer] page snippet:", snippet);
       return fail("Writer: textarea not found");
     }
 
@@ -366,8 +408,6 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
 
     const score = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll("*"));
-
-      // Writer shows "X% AI-generated" or "X% Human-generated"
       for (const el of allEls) {
         const t = el.textContent?.trim() ?? "";
         const aiMatch = t.match(/(\d{1,3})%\s*(?:AI|ai.generated)/i);
@@ -386,13 +426,35 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
       return -1;
     });
 
-    console.log("[originality/writer] score:", score);
-    if (score === -1) {
-      const snippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
-      console.log("[originality/writer] page snippet:", snippet);
-    }
+    // Writer.com highlights AI sentences in red/orange
+    const flaggedSentences = await page.evaluate(() => {
+      const results: string[] = [];
+      const cssSelectors = [
+        'mark',
+        '[style*="background-color: red"]',
+        '[style*="background-color:red"]',
+        '[style*="background: rgb(255"]',
+        '[style*="color: rgb(255"]',
+        '[class*="highlight"]',
+        '[class*="ai-text"]',
+        '[class*="flagged"]',
+        '[class*="detected"]',
+      ];
+      for (const sel of cssSelectors) {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
+          const t = el.textContent?.trim() ?? "";
+          if (t.length > 20 && t.length < 600) results.push(t);
+        }
+      }
+      return Array.from(new Set(results)).slice(0, 15);
+    });
 
-    return score === -1 ? fail("Writer: could not parse score") : { score, label: `${score}% AI` };
+    console.log("[originality/writer] score:", score, "flagged:", flaggedSentences.length);
+
+    return score === -1
+      ? fail("Writer: could not parse score")
+      : { score, label: `${score}% AI`, flaggedSentences };
   } catch (err) {
     console.log("[originality] error:", err instanceof Error ? err.message : String(err));
     return fail(`Writer: ${err instanceof Error ? err.message : String(err)}`);
@@ -400,7 +462,6 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
 }
 
 // ─── Coordinator ─────────────────────────────────────────────────────────────
-// Opens one browser, gives each scraper its own stealth context (separate cookies/fingerprint).
 
 export async function scoreAllDetectors(text: string): Promise<AllScores> {
   const browser = await chromium.launch({
@@ -409,7 +470,6 @@ export async function scoreAllDetectors(text: string): Promise<AllScores> {
   });
 
   try {
-    // Each detector gets its own context to avoid shared state / bot fingerprinting
     const [ctx1, ctx2, ctx3, ctx4] = await Promise.all([
       newStealthContext(browser),
       newStealthContext(browser),
@@ -432,18 +492,13 @@ export async function scoreAllDetectors(text: string): Promise<AllScores> {
     ]);
 
     console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score} originality=${originality.score}`);
-    if (gptzero.error) console.log(`[scrapers] gptzero-err: ${gptzero.error}`);
-    if (zerogpt.error) console.log(`[scrapers] zerogpt-err: ${zerogpt.error}`);
-    if (quillbot.error) console.log(`[scrapers] quillbot-err: ${quillbot.error}`);
-    if (originality.error) console.log(`[scrapers] originality-err: ${originality.error}`);
+    console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} quillbot=${quillbot.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
 
     return { gptzero, zerogpt, quillbot, originality };
   } finally {
     await browser.close();
   }
 }
-
-// ─── Single detector scrape (for targeted re-check) ─────────────────────────
 
 export async function scrapeSingleDetector(
   text: string,

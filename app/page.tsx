@@ -32,6 +32,8 @@ export default function Home() {
   const [deepMode, setDeepMode] = useState(false);
   const [deepScores, setDeepScores] = useState<DeepScores | null>(null);
   const [deepIterations, setDeepIterations] = useState<number | null>(null);
+  const [deepStatus, setDeepStatus] = useState<string>("");
+  const [liveScores, setLiveScores] = useState<DeepScores | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -67,11 +69,11 @@ export default function Home() {
     setOutputScore(null);
     setDeepScores(null);
     setDeepIterations(null);
+    setDeepStatus("");
+    setLiveScores(null);
 
     try {
       if (deepMode) {
-        // Deep mode — calls /api/humanize-deep (same origin on Railway,
-        // or cross-domain if NEXT_PUBLIC_DEEP_API_URL points to Railway from Vercel)
         const deepEndpoint = `${DEEP_API_URL}/api/humanize-deep`;
         const res = await fetch(deepEndpoint, {
           method: "POST",
@@ -79,13 +81,64 @@ export default function Home() {
           body: JSON.stringify({ text: inputText, contentType, wordLimit }),
         });
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Deep humanize failed");
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          throw new Error(data.error || "Deep humanize failed");
+        }
+        if (!res.body) throw new Error("No response stream");
 
-        setOutputText(data.humanizedText);
-        setDeepIterations(data.iterations);
+        // Read SSE stream line-by-line
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalResult: { text: string; iterations: number; finalScores: { gptzero?: { score: number }; zerogpt?: { score: number }; quillbot?: { score: number }; originality?: { score: number } } } | null = null;
 
-        const fs = data.finalScores;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          for (const part of parts) {
+            const lines = part.split("\n");
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const json = line.slice(6).trim();
+              if (!json) continue;
+              try {
+                const evt = JSON.parse(json);
+                if (evt.type === "status") {
+                  setDeepStatus(evt.message);
+                } else if (evt.type === "score") {
+                  setLiveScores({
+                    gptzero: evt.scores?.gptzero?.score ?? -1,
+                    zerogpt: evt.scores?.zerogpt?.score ?? -1,
+                    quillbot: evt.scores?.quillbot?.score ?? -1,
+                    originality: evt.scores?.originality?.score ?? -1,
+                  });
+                } else if (evt.type === "result") {
+                  finalResult = evt;
+                } else if (evt.type === "error") {
+                  throw new Error(evt.message);
+                }
+              } catch (parseErr) {
+                if (parseErr instanceof Error && parseErr.message !== "Unexpected end of JSON input") {
+                  throw parseErr;
+                }
+              }
+            }
+          }
+        }
+
+        if (!finalResult) throw new Error("Stream ended without result");
+
+        setOutputText(finalResult.text);
+        setDeepIterations(finalResult.iterations);
+        setDeepStatus("");
+
+        const fs = finalResult.finalScores;
         setDeepScores({
           gptzero: fs?.gptzero?.score ?? -1,
           zerogpt: fs?.zerogpt?.score ?? -1,
@@ -93,9 +146,8 @@ export default function Home() {
           originality: fs?.originality?.score ?? -1,
         });
 
-        // Use local detector for score pill
         const { detectAI } = await import("@/lib/detector");
-        const r = detectAI(data.humanizedText);
+        const r = detectAI(finalResult.text);
         setOutputScore(r);
         const orig = detectAI(inputText);
         setInputScore(orig);
@@ -301,10 +353,30 @@ export default function Home() {
               }`}
             >
               {loading && (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="flex flex-col items-center gap-3 text-muted">
+                <div className="absolute inset-0 flex items-center justify-center p-6">
+                  <div className="flex flex-col items-center gap-3 text-muted max-w-sm text-center">
                     <Spinner size={24} />
-                    <span className="text-xs">Rewriting as {contentType}...</span>
+                    <span className="text-xs">
+                      {deepMode && deepStatus
+                        ? deepStatus
+                        : `Rewriting as ${contentType}...`}
+                    </span>
+                    {deepMode && liveScores && (
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                        {(["gptzero", "zerogpt", "quillbot", "originality"] as const).map(k => {
+                          const s = liveScores[k];
+                          if (s === -1) return null;
+                          const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-yellow-400" : "text-red-400";
+                          const labels: Record<string, string> = { gptzero: "GPTZero", zerogpt: "ZeroGPT", quillbot: "QuillBot", originality: "Origin." };
+                          return (
+                            <span key={k} className="text-[10px] tabular-nums flex items-center gap-1">
+                              <span className="text-muted/60">{labels[k]}</span>
+                              <span className={`font-medium ${color}`}>{s}%</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

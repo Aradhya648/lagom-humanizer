@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { humanizeDeep } from "@/lib/deep-humanizer";
+import { humanizeDeep, type DeepEvent } from "@/lib/deep-humanizer";
 import { type ContentType } from "@/prompts/pipeline";
 
-// Long timeout — 4 browser sessions + 4 LLM calls can take up to 2 min
-export const maxDuration = 300;
+// Very long timeout — SSE keeps connection alive via continuous events.
+// Max 10 minutes for full deep run (6 iterations × ~80s each).
+export const maxDuration = 800;
 
-// Allow CORS from Vercel frontend
 function corsHeaders(origin: string | null) {
   const allowed = process.env.ALLOWED_ORIGIN ?? "*";
   return {
@@ -25,52 +25,88 @@ export async function OPTIONS(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
 
+  let body: { text?: unknown; contentType?: unknown; wordLimit?: unknown; threshold?: unknown; maxIterations?: unknown };
   try {
-    const body = await req.json();
-    const { text, contentType, wordLimit, threshold, maxIterations } = body as {
-      text: unknown;
-      contentType: unknown;
-      wordLimit: unknown;
-      threshold: unknown;
-      maxIterations: unknown;
-    };
-
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return NextResponse.json({ error: "text must be a non-empty string" }, {
-        status: 400,
-        headers: corsHeaders(origin),
-      });
-    }
-
-    const validTypes: ContentType[] = ["essay", "academic", "email", "document", "general"];
-    if (!validTypes.includes(contentType as ContentType)) {
-      return NextResponse.json(
-        { error: "contentType must be one of: essay, academic, email, document, general" },
-        { status: 400, headers: corsHeaders(origin) }
-      );
-    }
-
-    const limit = typeof wordLimit === "number" && wordLimit > 0 ? wordLimit : 1000;
-    const thresh = typeof threshold === "number" ? threshold : 15;
-    const maxIter = typeof maxIterations === "number" ? Math.min(maxIterations, 4) : 4;
-
-    const result = await humanizeDeep(text, contentType as ContentType, limit, {
-      threshold: thresh,
-      maxIterations: maxIter,
-    });
-
-    return NextResponse.json({
-      humanizedText: result.text,
-      finalScores: result.finalScores,
-      iterations: result.iterations,
-      scoreHistory: result.scoreHistory,
-    }, { headers: corsHeaders(origin) });
-  } catch (error) {
-    console.error("Humanize-deep API error:", error);
-    const message = error instanceof Error ? error.message : "Internal server error";
-    return NextResponse.json({ error: message }, {
-      status: 500,
-      headers: corsHeaders(origin),
-    });
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: 400, headers: corsHeaders(origin) }
+    );
   }
+
+  const { text, contentType, wordLimit, threshold, maxIterations } = body;
+
+  // Validation (fail fast before streaming starts)
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return NextResponse.json(
+      { error: "text must be a non-empty string" },
+      { status: 400, headers: corsHeaders(origin) }
+    );
+  }
+
+  const validTypes: ContentType[] = ["essay", "academic", "email", "document", "general"];
+  if (!validTypes.includes(contentType as ContentType)) {
+    return NextResponse.json(
+      { error: "contentType must be one of: essay, academic, email, document, general" },
+      { status: 400, headers: corsHeaders(origin) }
+    );
+  }
+
+  const limit = typeof wordLimit === "number" && wordLimit > 0 ? wordLimit : 1000;
+  const thresh = typeof threshold === "number" ? threshold : 5;
+  const maxIter = typeof maxIterations === "number" ? Math.min(maxIterations, 8) : 6;
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: DeepEvent) => {
+        try {
+          const payload = `data: ${JSON.stringify(event)}\n\n`;
+          controller.enqueue(encoder.encode(payload));
+        } catch {
+          // Controller already closed
+        }
+      };
+
+      // Heartbeat: send a comment every 15s so the connection doesn't idle out
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
+        } catch {
+          clearInterval(heartbeat);
+        }
+      }, 15_000);
+
+      try {
+        await humanizeDeep(
+          text,
+          contentType as ContentType,
+          limit,
+          { threshold: thresh, maxIterations: maxIter },
+          send,
+        );
+      } catch (err) {
+        console.error("Humanize-deep error:", err);
+        const message = err instanceof Error ? err.message : "Internal server error";
+        send({ type: "error", message });
+      } finally {
+        clearInterval(heartbeat);
+        try {
+          controller.close();
+        } catch { /* already closed */ }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      ...corsHeaders(origin),
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
