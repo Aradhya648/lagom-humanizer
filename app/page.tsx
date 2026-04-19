@@ -124,15 +124,18 @@ export default function Home() {
                   throw new Error(evt.message);
                 }
               } catch (parseErr) {
-                if (parseErr instanceof Error && parseErr.message !== "Unexpected end of JSON input") {
-                  throw parseErr;
-                }
+                // Swallow JSON parse errors and Safari DOMExceptions from
+                // incomplete SSE frames — only rethrow app-level errors
+                // (i.e. those we explicitly threw from evt.type === "error").
+                const msg = parseErr instanceof Error ? parseErr.message : "";
+                const isAppError = msg && !msg.includes("JSON") && !msg.includes("token") && !msg.includes("expected pattern") && !msg.includes("Unexpected end");
+                if (isAppError) throw parseErr;
               }
             }
           }
         }
 
-        if (!finalResult) throw new Error("Stream ended without result");
+        if (!finalResult) throw new Error("Deep mode requires a backend with Playwright. Make sure NEXT_PUBLIC_DEEP_API_URL points to your Railway deployment.");
 
         setOutputText(finalResult.text);
         setDeepIterations(finalResult.iterations);

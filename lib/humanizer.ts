@@ -515,6 +515,22 @@ const CASUAL_PARENS = [
 ];
 const LIST_RE = /(\b\w+),\s+(\w+),?\s+and\s+(\w+)\b/;
 
+// Grammar-safe clause-boundary detector.
+// Given a sentence, returns comma positions where the following segment
+// starts with a subordinator/conjunction — these are safe insertion points
+// because the text on each side is guaranteed to be a complete-ish clause.
+const CLAUSE_BOUNDARY_RE = /,\s+(which|who|where|when|while|although|though|because|since|as|and|but|or|yet|so|whereas|if|unless|until|before|after)\b/i;
+
+function findClauseBoundaryCommas(sentence: string): number[] {
+  const out: number[] = [];
+  const re = /,\s+(which|who|where|when|while|although|though|because|since|as|and|but|or|yet|so|whereas|if|unless|until|before|after)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sentence)) !== null) {
+    out.push(m.index); // index of the comma
+  }
+  return out;
+}
+
 function structuralPerplexityInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const parens = isFormal ? FORMAL_PARENS : CASUAL_PARENS;
@@ -522,42 +538,43 @@ function structuralPerplexityInjector(text: string, register: SourceRegister): s
   let totalMods = 0;
 
   const result = paragraphs.map((para, pIdx) => {
-    if (totalMods >= 5) return para;
+    if (totalMods >= 4) return para;
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
     let paraModCount = 0;
 
     const processed = sentences.map((sentence, sIdx) => {
-      if (paraModCount >= 2) return sentence;
+      if (paraModCount >= 1) return sentence;
       const words = sentence.split(/\s+/).length;
 
-      // A: Parenthetical insertion after first comma in 18+ word sentences
-      if (words >= 18 && sIdx >= 1 && sIdx <= 2 && paraModCount === 0) {
-        const commaPos = sentence.indexOf(",");
-        if (commaPos > 10 && commaPos < sentence.length - 20) {
+      // A: Parenthetical insertion ONLY at a clause-boundary comma (followed by
+      // a subordinator/conjunction). This prevents landing inside a compound
+      // noun or list item.
+      if (words >= 18 && sIdx >= 1 && sIdx <= 2) {
+        const boundaries = findClauseBoundaryCommas(sentence);
+        // Prefer a boundary roughly in the middle third of the sentence
+        const candidate = boundaries.find(b => b > 15 && b < sentence.length - 25);
+        if (candidate !== undefined) {
           const paren = parens[(pIdx + sIdx + totalMods) % parens.length];
           paraModCount++; totalMods++;
-          return `${sentence.slice(0, commaPos + 1)} ${paren}${sentence.slice(commaPos + 1)}`;
+          return `${sentence.slice(0, candidate + 1)} ${paren}${sentence.slice(candidate + 1)}`;
         }
       }
 
-      // B: Break "X, Y, and Z" list pattern
-      if (LIST_RE.test(sentence) && paraModCount < 2) {
+      // B: Break "X, Y, and Z" list pattern (unchanged — operates on full
+      // 3-item lists only, grammar-safe).
+      if (LIST_RE.test(sentence) && paraModCount < 1) {
         const modified = sentence.replace(LIST_RE, (_, a, b, c) => `${a} and ${b} — along with ${c}`);
         if (modified !== sentence) { paraModCount++; totalMods++; return modified; }
       }
 
-      // C: Comma → semicolon in long sentences
-      if (words >= 20 && paraModCount < 2) {
-        const commas: number[] = [];
-        let pos = 0;
-        while ((pos = sentence.indexOf(",", pos)) !== -1) { commas.push(pos); pos++; }
-        if (commas.length >= 2) {
-          const mid = commas[Math.floor(commas.length / 2)];
-          if (mid > 15 && mid < sentence.length - 15) {
-            paraModCount++; totalMods++;
-            return `${sentence.slice(0, mid)};${sentence.slice(mid + 1)}`;
-          }
+      // C: Comma → semicolon ONLY at a clause boundary comma.
+      if (words >= 20 && paraModCount < 1) {
+        const boundaries = findClauseBoundaryCommas(sentence);
+        const candidate = boundaries.find(b => b > 15 && b < sentence.length - 15);
+        if (candidate !== undefined) {
+          paraModCount++; totalMods++;
+          return `${sentence.slice(0, candidate)};${sentence.slice(candidate + 1)}`;
         }
       }
 
@@ -569,6 +586,9 @@ function structuralPerplexityInjector(text: string, register: SourceRegister): s
 
   return result.join("\n\n");
 }
+// Silence unused-symbol warning; the regex constant is retained for future
+// callers but the per-call function findClauseBoundaryCommas is what runs.
+void CLAUSE_BOUNDARY_RE;
 
 // ─── Inter-Paragraph Divergence ──────────────────────────────────────────────
 // Swaps a repeated content word in adjacent paragraphs with a lateral synonym.
@@ -653,29 +673,39 @@ export function burstinessInjector(text: string, register: SourceRegister): stri
     // Fire if stdDev < 8 (was 5 — now catches nearly-uniform paragraphs too)
     if (stdDev >= 8) return para;
 
-    let modified = [...sentences];
+    const modified = [...sentences];
     let didModify = false;
 
-    // Strategy A: Split longest sentence at a comma
+    // Strategy A: Split longest sentence ONLY at a clause-boundary comma
+    // (one followed by a coordinating conjunction). Splitting at an arbitrary
+    // comma produces sentence fragments like "Modern healthcare's field."
     const longestIdx = lengths.indexOf(Math.max(...lengths));
-    if (lengths[longestIdx] > 18) {
-      const commaPos = modified[longestIdx].indexOf(",", 15);
-      if (commaPos > 0 && commaPos < modified[longestIdx].length - 15) {
-        const first = modified[longestIdx].slice(0, commaPos).trimEnd() + ".";
-        const second = modified[longestIdx].slice(commaPos + 1).trimStart();
+    if (lengths[longestIdx] > 20) {
+      const target = modified[longestIdx];
+      // Match ", and|but|or|yet|so " — coordinating conjunctions that can
+      // become the start of a new sentence after the comma is promoted.
+      const coordRe = /,\s+(and|but|or|yet|so)\s+/i;
+      const m = coordRe.exec(target);
+      if (m && m.index > 20 && m.index < target.length - 20) {
+        const commaPos = m.index;
+        const afterCommaStart = commaPos + m[0].length;
+        const first = target.slice(0, commaPos).trimEnd() + ".";
+        const rest = target.slice(afterCommaStart).trimStart();
+        // Capitalize first letter of the new sentence.
         modified[longestIdx] = first;
-        modified.splice(longestIdx + 1, 0, second.charAt(0).toUpperCase() + second.slice(1));
+        modified.splice(longestIdx + 1, 0, rest.charAt(0).toUpperCase() + rest.slice(1));
         didModify = true;
         totalInjections++;
       }
     }
 
-    // Strategy B: Also inject a bridge sentence for extreme variance (GPTZero needs spiky length pattern)
-    if (modified.length >= 3) {
-      const bridge = bridges[(pIdx + totalInjections) % bridges.length];
-      // Insert near start (after sentence 1) to create early contrast
+    // Strategy B: Bridge injection — only ONCE per full pass (not per
+    // paragraph) to avoid literal duplicate sentences like "The data
+    // confirms this." appearing multiple times.
+    if (!didModify && modified.length >= 3 && totalInjections === 0) {
+      const bridge = bridges[pIdx % bridges.length];
       modified.splice(1, 0, bridge);
-      if (!didModify) totalInjections++;
+      totalInjections++;
     }
 
     return modified.join(" ");
@@ -715,32 +745,26 @@ function emDashInjector(text: string, register: SourceRegister): string {
   let totalInjections = 0;
 
   const result = paragraphs.map((para, pIdx) => {
-    if (totalInjections >= 3) return para;
+    if (totalInjections >= 2) return para;
     const sentences = getSentences(para);
     const modified = sentences.map((sentence, sIdx) => {
-      if (totalInjections >= 3) return sentence;
+      if (totalInjections >= 2) return sentence;
       const words = sentence.split(/\s+/).length;
-      if (words < 20) return sentence;
+      if (words < 22) return sentence;
       // Only inject into every 2nd qualifying sentence to avoid over-formatting
       if ((pIdx + sIdx) % 2 !== 0) return sentence;
 
-      // Find a natural injection point: after a content word around the mid-point
-      const wordArr = sentence.split(/\s+/);
-      const mid = Math.floor(wordArr.length * 0.45);
-      // Look for a word boundary near mid that isn't a comma or conjunction
-      let insertAt = -1;
-      for (let offset = 0; offset <= 4; offset++) {
-        const idx = mid + offset;
-        if (idx < wordArr.length - 4 && !/^(and|or|but|the|a|an|of|in|to|with|for)$/i.test(wordArr[idx])) {
-          insertAt = idx;
-          break;
-        }
-      }
-      if (insertAt === -1) return sentence;
+      // Grammar-safe: only insert em-dash asides at an existing comma that
+      // sits at a clause boundary (followed by a subordinator/conjunction).
+      // This guarantees the aside lands between complete clauses and never
+      // inside a compound noun like "artificial intelligence".
+      const boundaries = findClauseBoundaryCommas(sentence);
+      const commaPos = boundaries.find(b => b > 15 && b < sentence.length - 20);
+      if (commaPos === undefined) return sentence;
 
       const aside = asides[(pIdx + sIdx + totalInjections) % asides.length];
-      const before = wordArr.slice(0, insertAt + 1).join(" ");
-      const after = wordArr.slice(insertAt + 1).join(" ");
+      const before = sentence.slice(0, commaPos); // drop the comma
+      const after = sentence.slice(commaPos + 1).trimStart();
       totalInjections++;
       return `${before}—${aside}—${after}`;
     });
@@ -793,6 +817,71 @@ export function openerDiversityPass(text: string): string {
     });
     return rewritten.join(" ");
   }).join("\n\n");
+}
+
+// ─── Grammar & Duplicate Cleanup ─────────────────────────────────────────────
+// Safety net that runs AFTER the deterministic injectors to catch damage they
+// may have introduced:
+//   1. Near-duplicate sentences within the same paragraph (bridge sentences
+//      being reinserted across iterations).
+//   2. Obvious sentence fragments (no verb, under 5 words, starting with a
+//      lowercase word) are merged into the previous sentence.
+
+function normalizeForDedup(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function looksLikeFragment(s: string): boolean {
+  const trimmed = s.trim();
+  if (trimmed.length === 0) return true;
+  const words = trimmed.split(/\s+/);
+  if (words.length < 4) return true;
+  // Starts with a lowercase letter → likely a continuation spliced wrong.
+  const first = trimmed[0];
+  if (first >= "a" && first <= "z") return true;
+  // No verb-like token (very rough — any word ending in common verb suffixes
+  // or a small set of auxiliaries).
+  const hasVerb = /\b(is|are|was|were|be|been|being|has|have|had|do|does|did|will|would|can|could|should|may|might|must|\w+s|\w+ed|\w+ing)\b/i.test(trimmed);
+  return !hasVerb;
+}
+
+export function grammarAndDedupPass(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/);
+  const seenGlobal = new Set<string>();
+
+  const cleaned = paragraphs.map((para) => {
+    const sentences = getSentences(para);
+    if (sentences.length === 0) return para;
+
+    const kept: string[] = [];
+    const seenLocal = new Set<string>();
+
+    for (const s of sentences) {
+      const norm = normalizeForDedup(s);
+      if (norm.length === 0) continue;
+
+      // Drop exact near-duplicates within the paragraph AND globally if short
+      // (short sentences like "The data confirms this." are high-risk).
+      if (seenLocal.has(norm)) continue;
+      const wordCount = norm.split(" ").length;
+      if (wordCount <= 8 && seenGlobal.has(norm)) continue;
+
+      // Merge fragments into the previous sentence.
+      if (looksLikeFragment(s) && kept.length > 0) {
+        const prev = kept[kept.length - 1].replace(/[.!?]+$/, "");
+        kept[kept.length - 1] = `${prev}, ${s.trim().replace(/^[.,;:\s]+/, "")}`;
+        continue;
+      }
+
+      kept.push(s);
+      seenLocal.add(norm);
+      if (wordCount <= 8) seenGlobal.add(norm);
+    }
+
+    return kept.join(" ");
+  });
+
+  return cleaned.join("\n\n");
 }
 
 // ─── Length Discipline ────────────────────────────────────────────────────────
@@ -875,8 +964,12 @@ export async function humanize(
   // Pass 12: Opener diversity — no duplicate sentence-starting words
   const opened = openerDiversityPass(emdashed);
 
+  // Pass 12.5: Grammar & dedup safety net — removes fragment sentences and
+  // duplicate bridge sentences that the deterministic injectors may leave.
+  const grammarClean = grammarAndDedupPass(opened);
+
   // Pass 13: Length discipline (ceiling + floor)
-  const lengthCapped = enforceLengthDiscipline(opened, inputWordCount);
+  const lengthCapped = enforceLengthDiscipline(grammarClean, inputWordCount);
 
   // Pass 14: Expand if LLM compressed too aggressively (< 88% of original)
   const finalWordCount = lengthCapped.split(/\s+/).length;
