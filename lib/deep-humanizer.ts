@@ -61,7 +61,7 @@ async function callGeminiPro(prompt: string): Promise<string> {
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-pro",
+    model: "gemini-2.5-pro-preview-03-25",
     generationConfig: { temperature: 0.88, topP: 0.95, maxOutputTokens: 8192 },
   });
 
@@ -75,7 +75,7 @@ async function callGeminiFlash(prompt: string): Promise<string> {
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.5-flash-preview-04-17",
     generationConfig: { temperature: 0.92, topP: 0.95, maxOutputTokens: 2048 },
   });
 
