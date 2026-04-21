@@ -517,8 +517,8 @@ export default function Home() {
           <span className="text-xs text-faint w-1/3">
             Lagom : Leverage AI Smartly not heavily
           </span>
-          <span className="text-xs text-faint/70 w-1/3 text-center">
-            Drufiy AI Pvt Ltd
+          <span className="w-1/3 text-center text-[11px] font-bold tracking-widest uppercase gradient-text" style={{ filter: "drop-shadow(0 0 6px rgba(0,212,170,0.3))" }}>
+            By · Drufiy AI Pvt. Ltd.
           </span>
           <span className="text-xs text-faint/50 w-1/3 text-right">
             Free to use
