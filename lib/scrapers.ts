@@ -65,6 +65,26 @@ async function dismissCookies(page: Page): Promise<void> {
       await page.waitForTimeout(600);
     }
   } catch { /* ignore */ }
+
+  // Remove sticky overlays/footers that intercept pointer events
+  await page.evaluate(() => {
+    const selectors = [
+      "#fs-sticky-footer",
+      ".fs-sticky-footer",
+      "[id*='cookie']",
+      "[class*='cookie-banner']",
+      "[class*='consent']",
+      "[class*='gdpr']",
+      "[id*='gdpr']",
+      "[class*='sticky-footer']",
+      "[id*='sticky-footer']",
+      "[class*='overlay']",
+      "[class*='modal-backdrop']",
+    ];
+    for (const sel of selectors) {
+      document.querySelectorAll(sel).forEach(el => (el as HTMLElement).remove());
+    }
+  }).catch(() => null);
 }
 
 async function fillInput(page: Page, locator: import("playwright").Locator, text: string): Promise<void> {
@@ -111,7 +131,8 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
     console.log("[gptzero] checkBtn found:", btnFound);
     if (!btnFound) return fail("GPTZero: submit button not found");
 
-    await checkBtn.click();
+    await checkBtn.scrollIntoViewIfNeeded().catch(() => null);
+    await checkBtn.click({ force: true, timeout: 15000 });
     console.log("[gptzero] clicked submit, waiting for result...");
     await page.waitForTimeout(WAIT_FOR_RESULT);
 
@@ -226,7 +247,8 @@ async function scrapeZeroGPTPage(page: Page, text: string): Promise<DetectorScor
     console.log("[zerogpt] detectBtn found:", btnFound);
     if (!btnFound) return fail("ZeroGPT: submit button not found");
 
-    await detectBtn.click();
+    await detectBtn.scrollIntoViewIfNeeded().catch(() => null);
+    await detectBtn.click({ force: true, timeout: 15000 });
     console.log("[zerogpt] clicked submit, waiting...");
     await page.waitForTimeout(WAIT_FOR_RESULT);
 
@@ -311,15 +333,32 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
       "[data-placeholder]",
       "[role='textbox']",
       "textarea",
+      "[class*='editor']",
+      "[class*='input']",
+      "[class*='text-area']",
     ].join(", ")).first();
 
     const found = await textarea.isVisible({ timeout: 12000 }).catch(() => false);
     console.log("[quillbot] textarea found:", found);
-    if (!found) {
-      return fail("QuillBot: input area not found");
-    }
 
-    await fillInput(page, textarea, text);
+    if (!found) {
+      // JS fallback: find any editable element and inject text
+      const injected = await page.evaluate((txt) => {
+        const el = document.querySelector(
+          "[contenteditable='true'], textarea, [role='textbox'], .ql-editor, .ProseMirror"
+        ) as HTMLElement | null;
+        if (!el) return false;
+        el.focus();
+        if (el.tagName === "TEXTAREA") (el as HTMLTextAreaElement).value = txt;
+        else el.innerText = txt;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, text);
+      if (!injected) return fail("QuillBot: input area not found");
+    } else {
+      await fillInput(page, textarea, text);
+    }
     await page.waitForTimeout(500);
 
     const scanBtn = page.locator(
@@ -330,7 +369,8 @@ async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorSco
     console.log("[quillbot] scanBtn found:", btnFound);
     if (!btnFound) return fail("QuillBot: scan button not found");
 
-    await scanBtn.click();
+    await scanBtn.scrollIntoViewIfNeeded().catch(() => null);
+    await scanBtn.click({ force: true, timeout: 15000 });
     console.log("[quillbot] clicked submit, waiting...");
     await page.waitForTimeout(WAIT_FOR_RESULT + 2000); // QuillBot is slower
 
@@ -405,16 +445,30 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
     await page.waitForTimeout(1500);
 
     const textarea = page.locator(
-      "textarea, [contenteditable='true'], [role='textbox'], [placeholder*='text' i], [placeholder*='paste' i], [placeholder*='enter' i]"
+      "textarea, [contenteditable='true'], [role='textbox'], [placeholder*='text' i], [placeholder*='paste' i], [placeholder*='enter' i], [class*='editor'], [class*='input'], .ProseMirror"
     ).first();
 
     const found = await textarea.isVisible({ timeout: 10000 }).catch(() => false);
     console.log("[originality/writer] textarea found:", found);
-    if (!found) {
-      return fail("Writer: textarea not found");
-    }
 
-    await fillInput(page, textarea, text);
+    if (!found) {
+      // JS fallback
+      const injected = await page.evaluate((txt) => {
+        const el = document.querySelector(
+          "textarea, [contenteditable='true'], [role='textbox'], .ProseMirror"
+        ) as HTMLElement | null;
+        if (!el) return false;
+        el.focus();
+        if (el.tagName === "TEXTAREA") (el as HTMLTextAreaElement).value = txt;
+        else el.innerText = txt;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, text);
+      if (!injected) return fail("Writer: textarea not found");
+    } else {
+      await fillInput(page, textarea, text);
+    }
     await page.waitForTimeout(500);
 
     const scanBtn = page.locator(
@@ -425,7 +479,8 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
     console.log("[originality/writer] scanBtn found:", btnFound);
     if (!btnFound) return fail("Writer: scan button not found");
 
-    await scanBtn.click();
+    await scanBtn.scrollIntoViewIfNeeded().catch(() => null);
+    await scanBtn.click({ force: true, timeout: 15000 });
     console.log("[originality/writer] clicked submit, waiting...");
     // Writer.com can take 8-12s to process; poll for result instead of a fixed wait
     await page.waitForTimeout(3000);
