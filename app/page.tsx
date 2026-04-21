@@ -372,12 +372,12 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="bg-surface border border-border rounded-2xl shadow-panel overflow-hidden">
+            <div className="bg-surface border border-border rounded-2xl shadow-panel overflow-hidden h-80 lg:h-[460px]">
               <textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Paste your AI-generated text here..."
-                className="w-full h-80 lg:h-[460px] resize-none bg-transparent px-5 py-5 text-[15px] text-text placeholder:text-faint/50 leading-relaxed focus:outline-none"
+                className="w-full h-full resize-none bg-transparent px-5 py-5 text-[15px] text-text placeholder:text-faint/50 leading-relaxed focus:outline-none"
                 spellCheck={false}
               />
             </div>
