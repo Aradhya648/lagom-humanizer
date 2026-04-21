@@ -437,6 +437,7 @@ export default function Home() {
                     {deepMode && liveScores && (
                       <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
                         {(["gptzero", "zerogpt", "quillbot", "originality"] as const).map(k => {
+                          if (k === "gptzero") return null;
                           const s = liveScores[k];
                           if (s === -1) return null;
                           const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-amber-400" : "text-red-400";
@@ -476,6 +477,7 @@ export default function Home() {
                   </span>
                 )}
                 {(["gptzero", "zerogpt", "quillbot", "originality"] as const).map(k => {
+                  if (k === "gptzero") return null;
                   const s = deepScores[k];
                   if (s === -1) return null;
                   const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-amber-400" : "text-red-400";
