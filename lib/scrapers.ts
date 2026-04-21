@@ -117,23 +117,46 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
 
     const score = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll("*"));
+
+      // Strategy 1: "AI 73%" format — new GPTZero app UI (label comes BEFORE number)
       for (const el of allEls) {
         if (el.children.length > 3) continue;
         const t = el.textContent?.trim() ?? "";
-        if (/^\d{1,3}%$/.test(t)) {
-          const n = parseInt(t, 10);
-          if (n >= 0 && n <= 100) return n;
-        }
-        const aiMatch = t.match(/(\d{1,3})%\s*(?:AI|ai)/);
-        if (aiMatch) return parseInt(aiMatch[1], 10);
+        const labelFirst = t.match(/\bAI\s+(\d{1,3})\s*%/i);
+        if (labelFirst) { const n = parseInt(labelFirst[1], 10); if (n >= 0 && n <= 100) return n; }
       }
+
+      // Strategy 2: "73% AI" format — old UI
+      for (const el of allEls) {
+        if (el.children.length > 3) continue;
+        const t = el.textContent?.trim() ?? "";
+        const labelAfter = t.match(/(\d{1,3})\s*%\s*(?:AI|ai)\b/);
+        if (labelAfter) { const n = parseInt(labelAfter[1], 10); if (n >= 0 && n <= 100) return n; }
+      }
+
+      // Strategy 3: bare percentage in a leaf element
+      for (const el of allEls) {
+        if (el.children.length > 2) continue;
+        const t = el.textContent?.trim() ?? "";
+        if (/^\d{1,3}%$/.test(t)) { const n = parseInt(t, 10); if (n >= 0 && n <= 100) return n; }
+      }
+
+      // Strategy 4: data attributes
       for (const el of allEls) {
         const v = el.getAttribute("data-score") ?? el.getAttribute("data-ai-score") ?? el.getAttribute("data-ai");
-        if (v !== null) {
-          const n = parseFloat(v);
-          if (!isNaN(n)) return Math.round(n <= 1 ? n * 100 : n);
-        }
+        if (v !== null) { const n = parseFloat(v); if (!isNaN(n)) return Math.round(n <= 1 ? n * 100 : n); }
       }
+
+      // Strategy 5: infer from Human% — "Human 27%" → AI = 73%
+      for (const el of allEls) {
+        if (el.children.length > 3) continue;
+        const t = el.textContent?.trim() ?? "";
+        const humanFirst = t.match(/\bHuman\s+(\d{1,3})\s*%/i);
+        if (humanFirst) { const n = parseInt(humanFirst[1], 10); if (n >= 0 && n <= 100) return 100 - n; }
+        const humanAfter = t.match(/(\d{1,3})\s*%\s*Human\b/i);
+        if (humanAfter) { const n = parseInt(humanAfter[1], 10); if (n >= 0 && n <= 100) return 100 - n; }
+      }
+
       return -1;
     });
 
@@ -404,27 +427,39 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
 
     await scanBtn.click();
     console.log("[originality/writer] clicked submit, waiting...");
-    await page.waitForTimeout(WAIT_FOR_RESULT + 2000);
+    // Writer.com can take 8-12s to process; poll for result instead of a fixed wait
+    await page.waitForTimeout(3000);
+    let score = -1;
+    for (let attempt = 0; attempt < 6 && score === -1; attempt++) {
+      await page.waitForTimeout(2000);
+      score = await page.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll("*"));
 
-    const score = await page.evaluate(() => {
-      const allEls = Array.from(document.querySelectorAll("*"));
-      for (const el of allEls) {
-        const t = el.textContent?.trim() ?? "";
-        const aiMatch = t.match(/(\d{1,3})%\s*(?:AI|ai.generated)/i);
-        if (aiMatch) return parseInt(aiMatch[1], 10);
-      }
-      for (const el of allEls) {
-        const t = el.textContent?.trim() ?? "";
-        const humanMatch = t.match(/(\d{1,3})%\s*(?:human|original)/i);
-        if (humanMatch) return 100 - parseInt(humanMatch[1], 10);
-      }
-      for (const el of allEls) {
-        if (el.children.length > 2) continue;
-        const t = el.textContent?.trim() ?? "";
-        if (/^\d{1,3}%$/.test(t)) return parseInt(t, 10);
-      }
-      return -1;
-    });
+        // "% AI-generated" or "% AI" patterns
+        for (const el of allEls) {
+          if (el.children.length > 4) continue;
+          const t = el.textContent?.trim() ?? "";
+          const m = t.match(/(\d{1,3})\s*%\s*(?:AI[- ]?generated|AI\b)/i);
+          if (m) { const n = parseInt(m[1], 10); if (n >= 0 && n <= 100) return n; }
+        }
+        // "% human" / "% original" → invert
+        for (const el of allEls) {
+          if (el.children.length > 4) continue;
+          const t = el.textContent?.trim() ?? "";
+          const m = t.match(/(\d{1,3})\s*%\s*(?:human|original)/i);
+          if (m) { const n = parseInt(m[1], 10); if (n >= 0 && n <= 100) return 100 - n; }
+        }
+        // Bare percentage in leaf nodes
+        for (const el of allEls) {
+          if (el.children.length > 1) continue;
+          const t = el.textContent?.trim() ?? "";
+          if (/^\d{1,3}%$/.test(t)) { const n = parseInt(t, 10); if (n >= 0 && n <= 100) return n; }
+        }
+        return -1;
+      });
+      if (score !== -1) break;
+      console.log(`[originality/writer] attempt ${attempt + 1}: score still -1, retrying...`);
+    }
 
     // Writer.com highlights AI sentences in red/orange
     const flaggedSentences = await page.evaluate(() => {

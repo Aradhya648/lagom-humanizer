@@ -399,10 +399,18 @@ export async function humanizeDeep(
 
     console.log(`[deep iter ${iter + 1}] max=${max} avg=${avg.toFixed(0)} words=${current.split(/\s+/).length}`);
 
-    // Done if all valid detectors ≤ threshold
-    if (max !== -1 && max <= threshold) {
+    // Done only if:
+    //   1. At least one heavyweight (GPTZero or Originality) returned a valid score — so
+    //      we're not fooled into stopping early when both heavyweights silently failed.
+    //   2. All valid scores are ≤ threshold.
+    const validScores = getValidScores(scores);
+    const hasHeavyweight = validScores.some(s => s.name === "GPTZero" || s.name === "Originality");
+    if (max !== -1 && max <= threshold && hasHeavyweight) {
       onEvent({ type: "status", message: `All detectors ≤ ${threshold}% — done.` });
       break;
+    }
+    if (!hasHeavyweight) {
+      onEvent({ type: "status", message: `Heavyweights (GPTZero/Originality) did not return scores this round — continuing...` });
     }
 
     // Last iteration — no more work
