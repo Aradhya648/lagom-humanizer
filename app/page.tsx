@@ -23,6 +23,34 @@ interface DeepScores {
   originality: number;
 }
 
+// Particle positions for animated hero background
+const PARTICLES = [
+  { top: "15%", left: "5%",  dur: 25, delay: 0  },
+  { top: "25%", left: "12%", dur: 30, delay: 3  },
+  { top: "8%",  left: "22%", dur: 22, delay: 7  },
+  { top: "40%", left: "8%",  dur: 35, delay: 1  },
+  { top: "60%", left: "15%", dur: 28, delay: 5  },
+  { top: "75%", left: "5%",  dur: 32, delay: 11 },
+  { top: "10%", left: "35%", dur: 27, delay: 4  },
+  { top: "50%", left: "30%", dur: 24, delay: 9  },
+  { top: "80%", left: "25%", dur: 38, delay: 2  },
+  { top: "20%", left: "50%", dur: 29, delay: 6  },
+  { top: "65%", left: "45%", dur: 33, delay: 13 },
+  { top: "5%",  left: "60%", dur: 26, delay: 8  },
+  { top: "35%", left: "65%", dur: 31, delay: 14 },
+  { top: "55%", left: "70%", dur: 23, delay: 3  },
+  { top: "85%", left: "60%", dur: 36, delay: 10 },
+  { top: "15%", left: "78%", dur: 28, delay: 7  },
+  { top: "42%", left: "85%", dur: 34, delay: 1  },
+  { top: "70%", left: "80%", dur: 27, delay: 15 },
+  { top: "90%", left: "90%", dur: 21, delay: 6  },
+  { top: "30%", left: "95%", dur: 39, delay: 11 },
+  { top: "8%",  left: "88%", dur: 25, delay: 4  },
+  { top: "50%", left: "92%", dur: 30, delay: 9  },
+  { top: "75%", left: "95%", dur: 35, delay: 0  },
+  { top: "95%", left: "40%", dur: 22, delay: 12 },
+] as const;
+
 export default function Home() {
   const [inputText, setInputText] = useState("");
   const [outputText, setOutputText] = useState("");
@@ -193,38 +221,85 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Header */}
+
+      {/* ── Header ── */}
       <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3.5">
-            <span className="font-serif italic text-[1.6rem] text-text leading-none tracking-tight">
+          <div className="flex items-center gap-2.5">
+            {/* Wireframe lattice logo */}
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="16" cy="16" r="14" stroke="#22D3A0" strokeWidth="1.2" opacity="0.4"/>
+              <circle cx="16" cy="16" r="5" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="16" y1="11" x2="16" y2="2" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="16" y1="21" x2="16" y2="30" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="21" y1="16" x2="30" y2="16" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="11" y1="16" x2="2" y2="16" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="19.54" y1="12.46" x2="26.04" y2="5.96" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="12.46" y1="19.54" x2="5.96" y2="26.04" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="19.54" y1="19.54" x2="26.04" y2="26.04" stroke="#22D3A0" strokeWidth="1.2"/>
+              <line x1="12.46" y1="12.46" x2="5.96" y2="5.96" stroke="#22D3A0" strokeWidth="1.2"/>
+              <path d="M16 11 Q19 13.5 21 16" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
+              <path d="M21 16 Q18.5 19 16 21" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
+              <path d="M16 21 Q13 18.5 11 16" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
+              <path d="M11 16 Q13.5 13 16 11" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
+              <path d="M19.54 12.46 Q20 16 19.54 19.54" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
+              <path d="M19.54 19.54 Q16 20 12.46 19.54" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
+              <path d="M12.46 19.54 Q12 16 12.46 12.46" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
+              <path d="M12.46 12.46 Q16 12 19.54 12.46" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
+            </svg>
+            <span className="font-serif italic font-bold text-[1.5rem] text-text leading-none tracking-tight">
               lagom
-            </span>
-            <span className="hidden sm:block text-faint text-xs tracking-wide pt-0.5 font-light">
-              just the right amount of human
             </span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-faint">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-opacity" />
+            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse-opacity" />
             <span>Live</span>
           </div>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="flex-1 max-w-6xl mx-auto w-full px-5 sm:px-8 py-7">
+      {/* ── Hero Section ── */}
+      <section className="relative overflow-hidden hero-bg">
+        {/* Animated particles */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+          {PARTICLES.map((p, i) => (
+            <span
+              key={i}
+              className={`particle particle-${i % 6}`}
+              style={{
+                top: p.top,
+                left: p.left,
+                animationDuration: `${p.dur}s`,
+                animationDelay: `${p.delay}s`,
+              }}
+            />
+          ))}
+        </div>
+        {/* Hero text */}
+        <div className="relative z-10 max-w-6xl mx-auto px-5 sm:px-8 py-10 sm:py-16 text-center">
+          <h1 className="font-serif italic gradient-text text-[2rem] sm:text-[3rem] leading-tight mb-3 tracking-tight">
+            Humanize Your AI Text
+          </h1>
+          <p className="text-lg text-muted font-light max-w-md mx-auto leading-relaxed">
+            Bypass AI detection. Sound human. Every time.
+          </p>
+        </div>
+      </section>
+
+      {/* ── Main ── */}
+      <main className="flex-1 max-w-6xl mx-auto w-full px-5 sm:px-8 py-6">
 
         {/* Controls Bar */}
         <div className="bg-surface border border-border rounded-2xl shadow-panel px-4 py-3 mb-5">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-            {/* Content type selector */}
+            {/* Content type */}
             <div className="flex-shrink-0">
               <ContentTypeSelector value={contentType} onChange={setContentType} />
             </div>
 
             {/* Word limit */}
             <div className="flex items-center gap-2.5 flex-1 min-w-0">
-              <span className="text-xs text-faint whitespace-nowrap font-medium">
+              <span className="text-xs text-faint whitespace-nowrap font-medium uppercase tracking-widest">
                 Words
               </span>
               <input
@@ -248,14 +323,15 @@ export default function Home() {
               <button
                 onClick={() => setDeepMode(d => !d)}
                 title={deepMode ? "Deep Mode on — 4-detector loop, ~60–90s" : "Enable Deep Mode — scores all detectors and iterates"}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all duration-200 ${
+                style={deepMode ? { boxShadow: "0 0 12px rgba(34,211,160,0.25)" } : undefined}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
                   deepMode
-                    ? "border-accent/40 text-accent bg-accent-surface"
-                    : "border-border text-muted hover:border-accent/30 hover:text-accent/80 hover:bg-accent-surface/50"
+                    ? "border-2 border-accent text-accent bg-accent-surface"
+                    : "border border-border text-muted hover:border-accent/30 hover:text-accent/80 hover:bg-accent-surface/50"
                 }`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full ${deepMode ? "bg-accent animate-pulse-opacity" : "bg-faint/50"}`} />
-                Deep
+                <span className={`w-2 h-2 rounded-full ${deepMode ? "bg-accent animate-pulse-opacity" : "bg-faint/50"}`} />
+                · Deep
               </button>
 
               {/* Humanize button */}
@@ -279,7 +355,7 @@ export default function Home() {
 
         {/* Error */}
         {error && (
-          <div className="mb-5 px-4 py-3 rounded-xl bg-red-950/50 border border-red-800/60 text-red-400 text-sm">
+          <div className="mb-5 px-4 py-3 rounded-xl bg-red-950/50 border border-red-800/50 text-red-400 text-sm">
             {error}
           </div>
         )}
@@ -304,16 +380,12 @@ export default function Home() {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Paste your AI-generated text here..."
-                className="w-full h-80 lg:h-[460px] resize-none bg-transparent px-5 py-5 text-[15px] text-text placeholder:text-faint/60 leading-relaxed focus:outline-none"
+                className="w-full h-80 lg:h-[460px] resize-none bg-transparent px-5 py-5 text-[15px] text-text placeholder:text-faint/50 leading-relaxed focus:outline-none"
                 spellCheck={false}
               />
             </div>
             <div className="flex items-center justify-between px-1">
-              <span
-                className={`text-xs tabular-nums transition-colors ${
-                  isOverLimit ? "text-orange-400" : "text-faint"
-                }`}
-              >
+              <span className={`text-xs tabular-nums transition-colors ${isOverLimit ? "text-orange-400" : "text-faint"}`}>
                 {wordCount.toLocaleString()} / {MAX_WORDS.toLocaleString()} words
               </span>
               {isOverLimit && (
@@ -336,7 +408,7 @@ export default function Home() {
                     <span className={`font-medium ${getScoreColor(inputScore.score)}`}>
                       {inputScore.score}
                     </span>
-                    <span className="text-faint/50">→</span>
+                    <span className="text-faint/40">→</span>
                     <span className={`font-medium ${getScoreColor(outputScore.score)}`}>
                       {outputScore.score}
                     </span>
@@ -353,17 +425,17 @@ export default function Home() {
 
             <div
               className={`relative w-full h-80 lg:h-[460px] bg-surface border rounded-2xl shadow-panel overflow-y-auto transition-all duration-300 ${
-                loading ? "border-accent/25" : "border-border"
+                loading ? "border-accent/20 shadow-panel-active" : "border-border"
               }`}
             >
               {loading && (
                 <div className="absolute inset-0 flex items-center justify-center p-6">
-                  <div className="flex flex-col items-center gap-3 text-muted max-w-sm text-center">
-                    <Spinner size={22} />
+                  <div className="flex flex-col items-center gap-3 max-w-sm text-center">
+                    <span className="text-accent">
+                      <Spinner size={22} />
+                    </span>
                     <span className="text-xs text-faint">
-                      {deepMode && deepStatus
-                        ? deepStatus
-                        : `Rewriting as ${contentType}...`}
+                      {deepMode && deepStatus ? deepStatus : `Rewriting as ${contentType}...`}
                     </span>
                     {deepMode && liveScores && (
                       <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
@@ -386,7 +458,7 @@ export default function Home() {
               )}
               {!loading && !outputText && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-sm text-faint/60 text-center px-10 leading-relaxed">
+                  <span className="text-sm text-faint/50 text-center px-10 leading-relaxed">
                     Your humanized text will appear here
                   </span>
                 </div>
@@ -430,8 +502,8 @@ export default function Home() {
                   onClick={handleCopy}
                   className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-200 font-medium ${
                     copied
-                      ? "border-emerald-800/60 text-emerald-400 bg-emerald-950/50"
-                      : "border-border text-muted hover:border-accent/40 hover:text-accent hover:bg-accent-surface/50"
+                      ? "border-emerald-700/50 text-emerald-400 bg-emerald-950/60"
+                      : "border-border text-muted hover:border-accent/40 hover:text-accent hover:bg-accent-surface"
                   }`}
                 >
                   {copied ? "Copied!" : "Copy"}
@@ -442,14 +514,14 @@ export default function Home() {
         </div>
       </main>
 
-      {/* Footer */}
+      {/* ── Footer ── */}
       <footer className="border-t border-border py-5 mt-4">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-between">
           <span className="text-xs text-faint">
             <span className="font-serif italic text-muted">Lagom</span>
             {" · "}Built for writers, not robots
           </span>
-          <span className="text-xs text-faint/60">
+          <span className="text-xs text-faint/50">
             Free to use
           </span>
         </div>
