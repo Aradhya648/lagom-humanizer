@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { humanizeDeep, type DeepEvent } from "@/lib/deep-humanizer";
 import { type ContentType } from "@/prompts/pipeline";
 
-// Very long timeout — SSE keeps connection alive via continuous events.
-// Max 10 minutes for full deep run (6 iterations × ~80s each).
-export const maxDuration = 800;
+// maxDuration is a Vercel-only hint. Set to 300 (hobby plan ceiling) so
+// Vercel builds cleanly. In practice, deep mode routes to Railway via
+// NEXT_PUBLIC_DEEP_API_URL — Railway runs as a persistent server so this
+// limit never applies there.
+export const maxDuration = 300;
 
 function corsHeaders(origin: string | null) {
   const allowed = process.env.ALLOWED_ORIGIN ?? "*";
