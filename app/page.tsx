@@ -243,7 +243,7 @@ export default function Home() {
               lagom
             </span>
             <span className="text-[0.95rem] font-sans font-light text-muted leading-none tracking-wide">
-              human
+              Just the right amount of human
             </span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-faint">
