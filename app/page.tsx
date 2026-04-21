@@ -226,20 +226,17 @@ export default function Home() {
       <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            {/* Sunflower wireframe logo — 8 open petal outlines + center ring */}
+            {/* Techy sunflower — angular V-petals with terminal dots + crosshair center */}
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-              <circle cx="16" cy="16" r="2.5" stroke="#22D3A0" strokeWidth="1.2" />
+              <circle cx="16" cy="16" r="2.8" stroke="#22D3A0" strokeWidth="1.1" />
+              <line x1="12.8" y1="16" x2="19.2" y2="16" stroke="#22D3A0" strokeWidth="0.7" opacity="0.45"/>
+              <line x1="16" y1="12.8" x2="16" y2="19.2" stroke="#22D3A0" strokeWidth="0.7" opacity="0.45"/>
               {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => (
-                <path
-                  key={angle}
-                  d="M 14.5,12 C 11.5,7 13,3 16,3 C 19,3 20.5,7 17.5,12"
-                  stroke="#22D3A0"
-                  strokeWidth="1.15"
-                  strokeLinecap="round"
-                  fill="none"
-                  transform={`rotate(${angle} 16 16)`}
-                  opacity={angle % 90 === 0 ? 1 : 0.6}
-                />
+                <g key={angle} transform={`rotate(${angle} 16 16)`} opacity={angle % 90 === 0 ? 1 : 0.55}>
+                  <line x1="15.3" y1="13.2" x2="16" y2="4.2" stroke="#22D3A0" strokeWidth="1.1" strokeLinecap="round"/>
+                  <line x1="16.7" y1="13.2" x2="16" y2="4.2" stroke="#22D3A0" strokeWidth="1.1" strokeLinecap="round"/>
+                  <circle cx="16" cy="4.2" r="0.9" fill="#22D3A0" />
+                </g>
               ))}
             </svg>
             <span className="font-serif italic font-bold text-[1.5rem] text-text leading-none tracking-tight">
