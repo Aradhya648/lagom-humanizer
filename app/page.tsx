@@ -363,7 +363,7 @@ export default function Home() {
           {/* Input Panel */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between px-1">
-              <span className="text-[11px] font-semibold text-faint uppercase tracking-widest">
+              <span className="text-[11px] font-semibold text-accent/50 uppercase tracking-widest" style={{ textShadow: "0 0 8px rgba(0,212,170,0.4)" }}>
                 Input
               </span>
               <div className="flex items-center gap-2">
@@ -396,7 +396,7 @@ export default function Home() {
           {/* Output Panel */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between px-1">
-              <span className="text-[11px] font-semibold text-faint uppercase tracking-widest">
+              <span className="text-[11px] font-semibold text-accent/50 uppercase tracking-widest" style={{ textShadow: "0 0 8px rgba(0,212,170,0.4)" }}>
                 Output
               </span>
               <div className="flex items-center gap-2">
