@@ -173,7 +173,7 @@ const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90 };
 const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92 };
 
 // Stronger model for the mutation pass — better instruction following
-const MUTATION_MODEL = "gemini-2.0-flash";
+const MUTATION_MODEL = "gemini-2.5-pro";
 
 // ─── Model Wrappers ───────────────────────────────────────────────────────────
 
@@ -183,7 +183,7 @@ async function callGemini(prompt: string, settings: GenSettings): Promise<string
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     generationConfig: {
       temperature: settings.temperature,
       topP: settings.topP,
