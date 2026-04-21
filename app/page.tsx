@@ -194,94 +194,103 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-border bg-background/90 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="font-serif italic text-2xl text-text leading-none tracking-tight">
+      <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border">
+        <div className="max-w-6xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3.5">
+            <span className="font-serif italic text-[1.6rem] text-text leading-none tracking-tight">
               lagom
             </span>
-            <span className="hidden sm:block text-muted text-xs tracking-wide pt-0.5">
+            <span className="hidden sm:block text-faint text-xs tracking-wide pt-0.5 font-light">
               just the right amount of human
             </span>
           </div>
-          <div className="flex items-center gap-4 text-xs text-muted">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Live
-            </span>
+          <div className="flex items-center gap-1.5 text-xs text-faint">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-opacity" />
+            <span>Live</span>
           </div>
         </div>
       </header>
 
       {/* Main */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-5 sm:px-8 py-7">
+
         {/* Controls Bar */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-6">
-          <div className="w-full sm:w-auto sm:min-w-72">
-            <ContentTypeSelector value={contentType} onChange={setContentType} />
-          </div>
-          <div className="flex items-center gap-3 flex-1">
-            <span className="text-xs text-muted whitespace-nowrap">
-              Word limit
-            </span>
-            <input
-              type="range"
-              min={100}
-              max={1000}
-              step={50}
-              value={wordLimit}
-              onChange={(e) => setWordLimit(Number(e.target.value))}
-              className="flex-1 max-w-32"
-              aria-label="Word limit slider"
-            />
-            <span className="text-xs text-accent font-medium tabular-nums w-10">
-              {wordLimit}
-            </span>
-          </div>
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            {/* Deep Mode toggle — always visible */}
-            <button
-              onClick={() => setDeepMode(d => !d)}
-              title={deepMode ? "Deep Mode on — 4-detector loop, ~60–90s" : "Enable Deep Mode — scores all detectors and iterates"}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all duration-200 ${
-                deepMode
-                  ? "border-accent/60 text-accent bg-accent/10"
-                  : "border-border text-muted hover:border-accent/30 hover:text-accent/70"
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${deepMode ? "bg-accent animate-pulse" : "bg-muted/40"}`} />
-              Deep
-            </button>
-            <button
-              onClick={handleHumanize}
-              disabled={loading || !inputText.trim()}
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-accent text-background font-semibold text-sm transition-all duration-200 hover:bg-accent-dim disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
-            >
-              {loading ? (
-                <>
-                  <Spinner size={15} />
-                  {deepMode ? "Deep analyzing..." : "Humanizing..."}
-                </>
-              ) : (
-                deepMode ? "Deep Humanize" : "Humanize"
-              )}
-            </button>
+        <div className="bg-surface border border-border rounded-2xl shadow-panel px-4 py-3 mb-5">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            {/* Content type selector */}
+            <div className="flex-shrink-0">
+              <ContentTypeSelector value={contentType} onChange={setContentType} />
+            </div>
+
+            {/* Word limit */}
+            <div className="flex items-center gap-2.5 flex-1 min-w-0">
+              <span className="text-xs text-faint whitespace-nowrap font-medium">
+                Words
+              </span>
+              <input
+                type="range"
+                min={100}
+                max={1000}
+                step={50}
+                value={wordLimit}
+                onChange={(e) => setWordLimit(Number(e.target.value))}
+                className="flex-1 max-w-28"
+                aria-label="Word limit slider"
+              />
+              <span className="text-xs text-accent font-medium tabular-nums w-9 text-right">
+                {wordLimit}
+              </span>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              {/* Deep Mode toggle */}
+              <button
+                onClick={() => setDeepMode(d => !d)}
+                title={deepMode ? "Deep Mode on — 4-detector loop, ~60–90s" : "Enable Deep Mode — scores all detectors and iterates"}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all duration-200 ${
+                  deepMode
+                    ? "border-accent/40 text-accent bg-accent-surface"
+                    : "border-border text-muted hover:border-accent/30 hover:text-accent/80 hover:bg-accent-surface/50"
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${deepMode ? "bg-accent animate-pulse-opacity" : "bg-faint/50"}`} />
+                Deep
+              </button>
+
+              {/* Humanize button */}
+              <button
+                onClick={handleHumanize}
+                disabled={loading || !inputText.trim()}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2 rounded-xl bg-accent text-background font-semibold text-sm shadow-btn transition-all duration-200 hover:bg-accent-dim disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+              >
+                {loading ? (
+                  <>
+                    <Spinner size={14} />
+                    <span>{deepMode ? "Analyzing..." : "Rewriting..."}</span>
+                  </>
+                ) : (
+                  deepMode ? "Deep Humanize" : "Humanize"
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Error */}
         {error && (
-          <div className="mb-4 px-4 py-3 rounded-xl bg-red-950 border border-red-800 text-red-400 text-sm">
+          <div className="mb-5 px-4 py-3 rounded-xl bg-red-950/50 border border-red-800/60 text-red-400 text-sm">
             {error}
           </div>
         )}
 
         {/* Two-panel layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
           {/* Input Panel */}
           <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted uppercase tracking-wider">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[11px] font-semibold text-faint uppercase tracking-widest">
                 Input
               </span>
               <div className="flex items-center gap-2">
@@ -290,26 +299,26 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="relative">
+            <div className="bg-surface border border-border rounded-2xl shadow-panel overflow-hidden">
               <textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Paste your AI-generated text here..."
-                className="w-full h-80 lg:h-[460px] resize-none bg-surface border border-border rounded-2xl px-4 py-4 text-sm text-text placeholder:text-muted/50 leading-relaxed transition-all duration-200 focus:border-accent/40"
+                className="w-full h-80 lg:h-[460px] resize-none bg-transparent px-5 py-5 text-[15px] text-text placeholder:text-faint/60 leading-relaxed focus:outline-none"
                 spellCheck={false}
               />
             </div>
             <div className="flex items-center justify-between px-1">
               <span
                 className={`text-xs tabular-nums transition-colors ${
-                  isOverLimit ? "text-orange-400" : "text-muted"
+                  isOverLimit ? "text-orange-400" : "text-faint"
                 }`}
               >
                 {wordCount.toLocaleString()} / {MAX_WORDS.toLocaleString()} words
               </span>
               {isOverLimit && (
                 <span className="text-xs text-orange-400">
-                  Only the first {wordLimit} words will be processed
+                  First {wordLimit} words only
                 </span>
               )}
             </div>
@@ -317,22 +326,18 @@ export default function Home() {
 
           {/* Output Panel */}
           <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted uppercase tracking-wider">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[11px] font-semibold text-faint uppercase tracking-widest">
                 Output
               </span>
               <div className="flex items-center gap-2">
                 {inputScore && outputScore && (
-                  <span className="text-xs text-muted tabular-nums flex items-center gap-1">
-                    <span
-                      className={`font-medium ${getScoreColor(inputScore.score)}`}
-                    >
+                  <span className="text-xs text-faint tabular-nums flex items-center gap-1">
+                    <span className={`font-medium ${getScoreColor(inputScore.score)}`}>
                       {inputScore.score}
                     </span>
-                    <span>→</span>
-                    <span
-                      className={`font-medium ${getScoreColor(outputScore.score)}`}
-                    >
+                    <span className="text-faint/50">→</span>
+                    <span className={`font-medium ${getScoreColor(outputScore.score)}`}>
                       {outputScore.score}
                     </span>
                     {outputScore.score < inputScore.score && (
@@ -347,34 +352,30 @@ export default function Home() {
             </div>
 
             <div
-              className={`relative w-full h-80 lg:h-[460px] bg-surface border rounded-2xl px-4 py-4 overflow-y-auto transition-all duration-300 ${
-                loading
-                  ? "border-accent/30"
-                  : outputText
-                  ? "border-border"
-                  : "border-border"
+              className={`relative w-full h-80 lg:h-[460px] bg-surface border rounded-2xl shadow-panel overflow-y-auto transition-all duration-300 ${
+                loading ? "border-accent/25" : "border-border"
               }`}
             >
               {loading && (
                 <div className="absolute inset-0 flex items-center justify-center p-6">
                   <div className="flex flex-col items-center gap-3 text-muted max-w-sm text-center">
-                    <Spinner size={24} />
-                    <span className="text-xs">
+                    <Spinner size={22} />
+                    <span className="text-xs text-faint">
                       {deepMode && deepStatus
                         ? deepStatus
                         : `Rewriting as ${contentType}...`}
                     </span>
                     {deepMode && liveScores && (
-                      <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                      <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
                         {(["gptzero", "zerogpt", "quillbot", "originality"] as const).map(k => {
                           const s = liveScores[k];
                           if (s === -1) return null;
-                          const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-yellow-400" : "text-red-400";
+                          const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-amber-400" : "text-red-400";
                           const labels: Record<string, string> = { gptzero: "GPTZero", zerogpt: "ZeroGPT", quillbot: "QuillBot", originality: "Origin." };
                           return (
                             <span key={k} className="text-[10px] tabular-nums flex items-center gap-1">
-                              <span className="text-muted/60">{labels[k]}</span>
-                              <span className={`font-medium ${color}`}>{s}%</span>
+                              <span className="text-faint/70">{labels[k]}</span>
+                              <span className={`font-semibold ${color}`}>{s}%</span>
                             </span>
                           );
                         })}
@@ -385,50 +386,55 @@ export default function Home() {
               )}
               {!loading && !outputText && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-sm text-muted/40 text-center px-8">
+                  <span className="text-sm text-faint/60 text-center px-10 leading-relaxed">
                     Your humanized text will appear here
                   </span>
                 </div>
               )}
-              {!loading && outputText && <WordReveal text={outputText} />}
+              {!loading && outputText && (
+                <div className="px-5 py-5">
+                  <WordReveal text={outputText} />
+                </div>
+              )}
             </div>
 
             {/* Deep mode detector scores */}
             {deepScores && (
-              <div className="flex flex-wrap items-center gap-2 px-1 pb-1">
-                <span className="text-xs text-muted">
-                  {deepIterations != null ? `${deepIterations} iter${deepIterations !== 1 ? "s" : ""}` : ""}
-                </span>
+              <div className="flex flex-wrap items-center gap-3 px-1">
+                {deepIterations != null && (
+                  <span className="text-xs text-faint">
+                    {deepIterations} iter{deepIterations !== 1 ? "s" : ""}
+                  </span>
+                )}
                 {(["gptzero", "zerogpt", "quillbot", "originality"] as const).map(k => {
                   const s = deepScores[k];
                   if (s === -1) return null;
-                  const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-yellow-400" : "text-red-400";
+                  const color = s <= 15 ? "text-emerald-400" : s <= 40 ? "text-amber-400" : "text-red-400";
                   const labels: Record<string, string> = { gptzero: "GPTZero", zerogpt: "ZeroGPT", quillbot: "QuillBot", originality: "Origin." };
                   return (
                     <span key={k} className="text-xs tabular-nums flex items-center gap-1">
-                      <span className="text-muted/60">{labels[k]}</span>
-                      <span className={`font-medium ${color}`}>{s}%</span>
+                      <span className="text-faint/70">{labels[k]}</span>
+                      <span className={`font-semibold ${color}`}>{s}%</span>
                     </span>
                   );
                 })}
               </div>
             )}
+
             <div className="flex items-center justify-between px-1">
-              <span className="text-xs text-muted tabular-nums">
-                {outputWordCount > 0
-                  ? `${outputWordCount.toLocaleString()} words`
-                  : ""}
+              <span className="text-xs text-faint tabular-nums">
+                {outputWordCount > 0 ? `${outputWordCount.toLocaleString()} words` : ""}
               </span>
               {outputText && (
                 <button
                   onClick={handleCopy}
-                  className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-200 active:scale-95 ${
+                  className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-200 font-medium ${
                     copied
-                      ? "border-emerald-700 text-emerald-400 bg-emerald-950"
-                      : "border-border text-muted hover:border-accent/50 hover:text-accent"
+                      ? "border-emerald-800/60 text-emerald-400 bg-emerald-950/50"
+                      : "border-border text-muted hover:border-accent/40 hover:text-accent hover:bg-accent-surface/50"
                   }`}
                 >
-                  {copied ? "Copied!" : "Copy to clipboard"}
+                  {copied ? "Copied!" : "Copy"}
                 </button>
               )}
             </div>
@@ -437,13 +443,13 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-border py-4">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-          <span className="text-xs text-muted">
-            <span className="font-serif italic text-text/60">Lagom</span>
+      <footer className="border-t border-border py-5 mt-4">
+        <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-between">
+          <span className="text-xs text-faint">
+            <span className="font-serif italic text-muted">Lagom</span>
             {" · "}Built for writers, not robots
           </span>
-          <span className="text-xs text-muted/40">
+          <span className="text-xs text-faint/60">
             Free to use
           </span>
         </div>
@@ -461,7 +467,7 @@ function getLabelFromScore(score: number): DetectionResult["label"] {
 
 function getScoreColor(score: number): string {
   if (score <= 30) return "text-emerald-400";
-  if (score <= 60) return "text-yellow-400";
+  if (score <= 60) return "text-amber-400";
   if (score <= 80) return "text-orange-400";
   return "text-red-400";
 }

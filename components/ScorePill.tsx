@@ -9,31 +9,31 @@ interface ScorePillProps {
 function getColors(score: number) {
   if (score <= 30) {
     return {
-      bg: "bg-emerald-950",
-      border: "border-emerald-700",
+      bg: "bg-emerald-950/60",
+      border: "border-emerald-800/50",
       text: "text-emerald-400",
       dot: "bg-emerald-400",
     };
   }
   if (score <= 60) {
     return {
-      bg: "bg-yellow-950",
-      border: "border-yellow-700",
-      text: "text-yellow-400",
-      dot: "bg-yellow-400",
+      bg: "bg-amber-950/60",
+      border: "border-amber-800/50",
+      text: "text-amber-400",
+      dot: "bg-amber-400",
     };
   }
   if (score <= 80) {
     return {
-      bg: "bg-orange-950",
-      border: "border-orange-700",
+      bg: "bg-orange-950/60",
+      border: "border-orange-800/50",
       text: "text-orange-400",
       dot: "bg-orange-400",
     };
   }
   return {
-    bg: "bg-red-950",
-    border: "border-red-800",
+    bg: "bg-red-950/60",
+    border: "border-red-800/50",
     text: "text-red-400",
     dot: "bg-red-400",
   };
@@ -45,11 +45,11 @@ export default function ScorePill({ score, label, size = "md" }: ScorePillProps)
 
   return (
     <span
-      className={`score-pill inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium transition-all duration-400 ${colors.bg} ${colors.border} ${colors.text} ${isSmall ? "text-xs" : "text-xs"}`}
+      className={`score-pill inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium ${colors.bg} ${colors.border} ${colors.text} ${isSmall ? "text-[11px]" : "text-xs"}`}
     >
-      <span className={`inline-block w-1.5 h-1.5 rounded-full ${colors.dot}`} />
-      <span>{score}</span>
-      <span className="opacity-70">·</span>
+      <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${colors.dot}`} />
+      <span className="tabular-nums">{score}</span>
+      <span className="opacity-40">·</span>
       <span>{label}</span>
     </span>
   );

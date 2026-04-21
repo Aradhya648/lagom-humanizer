@@ -13,16 +13,14 @@ export default function Spinner({ size = 16 }: { size?: number }) {
         cy="12"
         r="10"
         stroke="currentColor"
-        strokeWidth="2.5"
+        strokeWidth="2"
         strokeLinecap="round"
-        strokeDasharray="31.4"
-        strokeDashoffset="10"
-        opacity="0.3"
+        opacity="0.15"
       />
       <path
         d="M12 2a10 10 0 0 1 10 10"
         stroke="currentColor"
-        strokeWidth="2.5"
+        strokeWidth="2"
         strokeLinecap="round"
       />
     </svg>

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Lora:ital@0;1&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -13,39 +13,39 @@ html {
 }
 
 body {
-  background-color: #0f0f0f;
-  color: #f0ede8;
-  font-family: 'DM Sans', system-ui, sans-serif;
+  background-color: #141210;
+  color: #F2EDE8;
+  font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbar */
+/* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
-  border-radius: 3px;
+  background: #3D3830;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #e8a838;
+  background: #C96442;
 }
 
-/* Textarea focus glow */
+/* Textarea — no default outline, custom focus ring */
 textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 1px #e8a83866, 0 0 16px 0 #e8a83822;
+  box-shadow: 0 0 0 2px rgba(201, 100, 66, 0.18);
 }
 
-/* Word fade-in animation for output */
+/* Word fade-in animation */
 @keyframes wordFadeIn {
   from {
     opacity: 0;
-    transform: translateY(3px);
+    transform: translateY(2px);
   }
   to {
     opacity: 1;
@@ -56,27 +56,28 @@ textarea:focus {
 .word-reveal span {
   display: inline;
   opacity: 0;
-  animation: wordFadeIn 0.25s ease forwards;
+  animation: wordFadeIn 0.22s ease forwards;
 }
 
-/* Score pill transition */
+/* Score pill */
 .score-pill {
-  transition: background-color 0.4s ease, color 0.4s ease;
+  transition: background-color 0.35s ease, color 0.35s ease, border-color 0.35s ease;
 }
 
-/* Button press */
-button:active {
-  transform: scale(0.97);
+/* Subtle button press */
+button:active:not(:disabled) {
+  transform: scale(0.975);
 }
 
-/* Slider styling */
+/* Range slider */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 2px;
-  background: #2a2a2a;
+  background: #2D2924;
   border-radius: 2px;
   outline: none;
+  cursor: pointer;
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -85,13 +86,15 @@ input[type="range"]::-webkit-slider-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #e8a838;
+  background: #C96442;
   cursor: pointer;
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 0 0 3px rgba(201, 100, 66, 0.12);
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
+  box-shadow: 0 0 0 4px rgba(201, 100, 66, 0.18);
 }
 
 input[type="range"]::-moz-range-thumb {
@@ -99,6 +102,6 @@ input[type="range"]::-moz-range-thumb {
   height: 14px;
   border: none;
   border-radius: 50%;
-  background: #e8a838;
+  background: #C96442;
   cursor: pointer;
 }

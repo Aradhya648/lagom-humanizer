@@ -16,12 +16,11 @@ export default function WordReveal({ text }: WordRevealProps) {
       return;
     }
 
-    // Reset and start new animation
     setDisplayedWords([]);
     setKey((k) => k + 1);
 
     const words = text.split(" ");
-    const batchSize = 8; // reveal words in batches for performance
+    const batchSize = 8;
     let currentIndex = 0;
 
     const interval = setInterval(() => {
@@ -39,23 +38,21 @@ export default function WordReveal({ text }: WordRevealProps) {
 
   if (!text) return null;
 
-  const words = text.split(" ");
   const paragraphs = text.split(/\n\n+/);
 
   return (
-    <div key={key} className="word-reveal leading-relaxed text-sm text-text/90">
+    <div key={key} className="word-reveal text-[15px] leading-[1.75] text-text">
       {paragraphs.map((para, pIdx) => {
         const paraWords = para.split(" ");
-        // Calculate offset for this paragraph's words
         const prevWords = paragraphs
           .slice(0, pIdx)
           .reduce((acc, p) => acc + p.split(" ").length + 1, 0);
 
         return (
-          <p key={pIdx} className={pIdx > 0 ? "mt-4" : ""}>
+          <p key={pIdx} className={pIdx > 0 ? "mt-5" : ""}>
             {paraWords.map((word, wIdx) => {
               const globalIdx = prevWords + wIdx;
-              const delay = Math.min(globalIdx * 15, 2000);
+              const delay = Math.min(globalIdx * 14, 1800);
               return (
                 <span
                   key={`${pIdx}-${wIdx}`}
