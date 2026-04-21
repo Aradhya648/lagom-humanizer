@@ -99,8 +99,8 @@ async function callGeminiPro(prompt: string): Promise<string> {
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-pro",
-    generationConfig: { temperature: 0.88, topP: 0.95, maxOutputTokens: 3072 },
+    model: "gemini-2.5-flash",
+    generationConfig: { temperature: 0.88, topP: 0.95, maxOutputTokens: 8192 },
   });
 
   const result = await withTimeout(
