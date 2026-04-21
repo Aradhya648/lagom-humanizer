@@ -242,6 +242,9 @@ export default function Home() {
             <span className="font-serif italic font-bold text-[1.5rem] text-text leading-none tracking-tight">
               lagom
             </span>
+            <span className="text-[0.95rem] font-sans font-light text-muted leading-none tracking-wide">
+              human
+            </span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-faint">
             <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse-opacity" />
