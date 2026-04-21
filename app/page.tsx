@@ -454,8 +454,8 @@ export default function Home() {
                 </div>
               )}
               {!loading && !outputText && (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-sm text-faint/50 text-center px-10 leading-relaxed">
+                <div className="px-5 py-5">
+                  <span className="text-[15px] text-faint/50 leading-relaxed">
                     Your humanized text will appear here
                   </span>
                 </div>
