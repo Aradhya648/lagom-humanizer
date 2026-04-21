@@ -175,7 +175,7 @@ const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutp
 const GEMINI_TIMEOUT_MS = 30_000;
 const SHORT_FAST_PATH_WORDS = 120;
 const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 768 };
-const FAST_MODEL = "gemini-2.0-flash";
+const FAST_MODEL = "gemini-2.5-flash";
 
 // Flash is materially faster here and the quality delta is negligible in fast mode.
 const MUTATION_MODEL = FAST_MODEL;

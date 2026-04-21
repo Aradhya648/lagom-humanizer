@@ -4,7 +4,7 @@ import { detectAI } from "@/lib/detector";
 import { type ContentType } from "@/prompts/pipeline";
 
 // Serverless runtime. Hobby plan caps at 10s.
-// Pipeline uses gemini-2.0-flash (1-2s/call) to fit within that window.
+// Pipeline uses gemini-2.5-flash for the fast path to fit within that window.
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
