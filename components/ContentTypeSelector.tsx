@@ -13,27 +13,27 @@ const CONTENT_TYPES: { id: ContentType; label: string; tooltip: string }[] = [
   {
     id: "general",
     label: "General",
-    tooltip: "Maximum variation — no constraints on rhythm or register. Best for blog posts, articles, and everyday writing.",
+    tooltip: "Maximum Variation: No constraints on rhythm or register. Best for blog posts, articles, and everyday writing.",
   },
   {
     id: "essay",
     label: "Essay",
-    tooltip: "Academic essay — preserves complex clause structure and formal register. No contractions.",
+    tooltip: "Academic Essay: Preserves complex clause structure and formal register. No contractions.",
   },
   {
     id: "academic",
     label: "Academic",
-    tooltip: "Research writing — calibrated for papers and reports. Keeps technical vocabulary and formal connectors.",
+    tooltip: "Research Writing: Calibrated for papers and reports. Keeps technical vocabulary and formal connectors.",
   },
   {
     id: "email",
     label: "Email",
-    tooltip: "Conversational rhythm — natural contractions, direct tone. Reads like a real person writing to a colleague.",
+    tooltip: "Conversational Rhythm: Natural contractions, direct tone. Reads like a real person writing to a colleague.",
   },
   {
     id: "document",
     label: "Document",
-    tooltip: "Formal document — professional tone throughout. No contractions, precise vocabulary, clear structure.",
+    tooltip: "Formal Document: Professional tone throughout. No contractions, precise vocabulary, clear structure.",
   },
 ];
 
