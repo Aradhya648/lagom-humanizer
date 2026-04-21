@@ -169,12 +169,12 @@ interface GenSettings {
   maxOutputTokens?: number;
 }
 
-const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.85, topP: 0.95, maxOutputTokens: 1024 };
-const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90, maxOutputTokens: 1024 };
-const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutputTokens: 2048 };
+const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.85, topP: 0.95, maxOutputTokens: 4096 };
+const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90, maxOutputTokens: 4096 };
+const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutputTokens: 4096 };
 const GEMINI_TIMEOUT_MS = 30_000;
 const SHORT_FAST_PATH_WORDS = 120;
-const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 768 };
+const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 4096 };
 const FAST_MODEL = "gemini-2.5-flash";
 
 // Flash is materially faster here and the quality delta is negligible in fast mode.
@@ -209,7 +209,7 @@ async function callGemini(prompt: string, settings: GenSettings): Promise<string
       temperature: settings.temperature,
       topP: settings.topP,
       topK: settings.topK,
-      maxOutputTokens: settings.maxOutputTokens ?? 1024,
+      maxOutputTokens: settings.maxOutputTokens ?? 4096,
     },
   });
 
@@ -999,7 +999,7 @@ Output only the expanded text. No preamble.
 
 TEXT:
 ${lengthCapped}`;
-    const expanded = await callModel(expansionPrompt, { temperature: 0.70, topP: 0.90, maxOutputTokens: 1024 });
+    const expanded = await callModel(expansionPrompt, { temperature: 0.70, topP: 0.90, maxOutputTokens: 4096 });
     return enforceLengthDiscipline(expanded.trim() || lengthCapped, Math.round(inputWordCount * 1.05));
   }
 

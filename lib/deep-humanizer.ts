@@ -118,7 +118,7 @@ async function callGeminiFlash(prompt: string): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
-    generationConfig: { temperature: 0.92, topP: 0.95, maxOutputTokens: 512 },
+    generationConfig: { temperature: 0.92, topP: 0.95, maxOutputTokens: 4096 },
   });
 
   const result = await withTimeout(
