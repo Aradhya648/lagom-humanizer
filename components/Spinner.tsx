@@ -15,7 +15,7 @@ export default function Spinner({ size = 16 }: { size?: number }) {
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
-        opacity="0.15"
+        opacity="0.12"
       />
       <path
         d="M12 2a10 10 0 0 1 10 10"

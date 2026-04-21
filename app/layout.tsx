@@ -2,12 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "lagom — just the right amount of human",
+  title: "lagom: Just the right amount of human",
   description:
     "Transform AI-generated text into natural, human-sounding writing. Academic and general writing modes.",
   keywords: ["AI humanizer", "text humanizer", "academic writing", "AI detection", "humanize AI text"],
   openGraph: {
-    title: "lagom — just the right amount of human",
+    title: "lagom : Just the right amount of human",
     description: "Transform AI-generated text into natural, human-sounding writing.",
     type: "website",
   },

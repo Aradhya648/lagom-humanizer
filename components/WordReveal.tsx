@@ -41,7 +41,7 @@ export default function WordReveal({ text }: WordRevealProps) {
   const paragraphs = text.split(/\n\n+/);
 
   return (
-    <div key={key} className="word-reveal text-[15px] leading-[1.75] text-text">
+    <div key={key} className="word-reveal text-[15px] leading-[1.8] text-text">
       {paragraphs.map((para, pIdx) => {
         const paraWords = para.split(" ");
         const prevWords = paragraphs

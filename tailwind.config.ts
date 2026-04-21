@@ -9,17 +9,19 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "#141210",
-        surface: "#1E1B18",
-        "surface-raised": "#272320",
-        border: "#2D2924",
-        "border-strong": "#3D3830",
-        text: "#F2EDE8",
-        muted: "#8A8078",
-        faint: "#5A544E",
-        accent: "#C96442",
-        "accent-dim": "#A84E32",
-        "accent-surface": "#2A1610",
+        background: "#050810",
+        surface: "#0C1220",
+        "surface-raised": "#121A2A",
+        border: "#1A2840",
+        "border-strong": "#243850",
+        text: "#E0F0FF",
+        muted: "#608090",
+        faint: "#304858",
+        accent: "#00D4AA",
+        "accent-dim": "#00A884",
+        "accent-surface": "#021815",
+        "gradient-from": "#00D4AA",
+        "gradient-to": "#C084FC",
       },
       fontFamily: {
         serif: ["Lora", "Georgia", "serif"],
@@ -27,10 +29,10 @@ const config: Config = {
       },
       boxShadow: {
         panel:
-          "0 1px 3px 0 rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.04)",
-        "panel-focus":
-          "0 0 0 2px rgba(201, 100, 66, 0.2), 0 1px 3px 0 rgba(0, 0, 0, 0.3)",
-        btn: "0 1px 2px 0 rgba(0, 0, 0, 0.4)",
+          "0 1px 3px 0 rgba(0,0,0,0.6), 0 0 0 1px rgba(0,212,170,0.07)",
+        "panel-active":
+          "0 1px 3px 0 rgba(0,0,0,0.6), 0 0 0 1px rgba(0,212,170,0.18), inset 0 0 0 1px rgba(0,212,170,0.07)",
+        btn: "0 1px 3px 0 rgba(0,0,0,0.5), 0 0 18px 0 rgba(0,212,170,0.3)",
       },
       keyframes: {
         fadeWord: {
@@ -39,7 +41,7 @@ const config: Config = {
         },
         pulseOpacity: {
           "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.4" },
+          "50%": { opacity: "0.35" },
         },
       },
       animation: {

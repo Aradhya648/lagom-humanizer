@@ -13,8 +13,8 @@ html {
 }
 
 body {
-  background-color: #141210;
-  color: #F2EDE8;
+  background-color: #050810;
+  color: #E0F0FF;
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -28,17 +28,18 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3D3830;
+  background: #243850;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #C96442;
+  background: #00D4AA;
 }
 
-/* Textarea — no default outline, custom focus ring */
+/* Textarea focus — aurora teal glow */
 textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(201, 100, 66, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(0, 212, 170, 0.12),
+              0 0 0 2px rgba(0, 212, 170, 0.15);
 }
 
 /* Word fade-in animation */
@@ -64,17 +65,17 @@ textarea:focus {
   transition: background-color 0.35s ease, color 0.35s ease, border-color 0.35s ease;
 }
 
-/* Subtle button press */
+/* Button press */
 button:active:not(:disabled) {
   transform: scale(0.975);
 }
 
-/* Range slider */
+/* Range slider — aurora teal thumb */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 2px;
-  background: #2D2924;
+  background: #1A2840;
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -86,15 +87,15 @@ input[type="range"]::-webkit-slider-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #C96442;
+  background: #00D4AA;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 0 0 3px rgba(201, 100, 66, 0.12);
+  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.15), 0 0 8px rgba(0, 212, 170, 0.2);
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
-  box-shadow: 0 0 0 4px rgba(201, 100, 66, 0.18);
+  box-shadow: 0 0 0 5px rgba(0, 212, 170, 0.2), 0 0 12px rgba(0, 212, 170, 0.3);
 }
 
 input[type="range"]::-moz-range-thumb {
@@ -102,6 +103,76 @@ input[type="range"]::-moz-range-thumb {
   height: 14px;
   border: none;
   border-radius: 50%;
-  background: #C96442;
+  background: #00D4AA;
   cursor: pointer;
 }
+
+/* Hero section — aurora night sky */
+.hero-bg {
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(0, 212, 170, 0.07) 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 30%, rgba(168, 85, 247, 0.07) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 80%, rgba(34, 211, 238, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 60% 10%, rgba(129, 140, 248, 0.05) 0%, transparent 45%),
+    #050810;
+}
+
+/* Gradient headline text — teal → violet aurora sweep */
+.gradient-text {
+  background: linear-gradient(135deg, #00D4AA 0%, #818CF8 50%, #C084FC 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ── Hero particles ── */
+/* Base particle */
+.particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  opacity: 0.2;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+/* Aurora color bands — cyan, teal, purple cycling */
+.particle-0, .particle-3 { background: #22D3EE; opacity: 0.22; } /* cyan */
+.particle-1, .particle-4 { background: #00D4AA; opacity: 0.20; } /* teal */
+.particle-2, .particle-5 { background: #A855F7; opacity: 0.18; } /* violet */
+
+/* Float movement keyframes */
+@keyframes floatA {
+  from { transform: translate(0, 0); }
+  to   { transform: translate(14px, -18px); }
+}
+@keyframes floatB {
+  from { transform: translate(0, 0); }
+  to   { transform: translate(-11px, 14px); }
+}
+@keyframes floatC {
+  from { transform: translate(0, 0); }
+  to   { transform: translate(9px, 20px); }
+}
+@keyframes floatD {
+  from { transform: translate(0, 0); }
+  to   { transform: translate(-17px, -9px); }
+}
+@keyframes floatE {
+  from { transform: translate(0, 0); }
+  to   { transform: translate(22px, 6px); }
+}
+@keyframes floatF {
+  from { transform: translate(0, 0); }
+  to   { transform: translate(-6px, -22px); }
+}
+
+.particle-0 { animation-name: floatA; }
+.particle-1 { animation-name: floatB; }
+.particle-2 { animation-name: floatC; }
+.particle-3 { animation-name: floatD; }
+.particle-4 { animation-name: floatE; }
+.particle-5 { animation-name: floatF; }

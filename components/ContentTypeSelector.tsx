@@ -39,14 +39,14 @@ const CONTENT_TYPES: { id: ContentType; label: string; tooltip: string }[] = [
 
 export default function ContentTypeSelector({ value, onChange }: ContentTypeSelectorProps) {
   return (
-    <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-background border border-border shadow-panel">
+    <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-surface-raised border border-border">
       {CONTENT_TYPES.map((ct) => (
         <div key={ct.id} className="relative group">
           <button
             onClick={() => onChange(ct.id)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150 whitespace-nowrap ${
               value === ct.id
-                ? "bg-surface-raised text-text shadow-sm"
+                ? "bg-accent text-background shadow-sm"
                 : "text-muted hover:text-text hover:bg-surface"
             }`}
           >
@@ -54,10 +54,10 @@ export default function ContentTypeSelector({ value, onChange }: ContentTypeSele
           </button>
           {/* Tooltip */}
           <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 w-56 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-            <div className="bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-muted leading-relaxed shadow-panel">
+            <div className="bg-surface border border-border-strong rounded-xl px-3.5 py-2.5 text-xs text-muted leading-relaxed shadow-panel">
               {ct.tooltip}
             </div>
-            <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[5px] border-l-transparent border-r-transparent border-t-border" />
+            <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[5px] border-l-transparent border-r-transparent border-t-border-strong" />
           </div>
         </div>
       ))}
