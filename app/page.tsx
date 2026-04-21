@@ -512,8 +512,7 @@ export default function Home() {
       <footer className="border-t border-border py-5 mt-4">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-between">
           <span className="text-xs text-faint">
-            <span className="font-serif italic text-muted">Lagom</span>
-            {" · "}Built for writers, not robots
+            Leverage AI Smartly
           </span>
           <span className="text-xs text-faint/50">
             Free to use
