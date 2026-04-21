@@ -276,7 +276,7 @@ export default function Home() {
             Humanize Your AI Text
           </h1>
           <p className="text-lg text-muted font-light max-w-md mx-auto leading-relaxed">
-            Just the right amount of human
+            Bypass AI detection and sound human every time
           </p>
         </div>
       </section>
