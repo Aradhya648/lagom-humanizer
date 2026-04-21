@@ -514,10 +514,13 @@ export default function Home() {
       {/* ── Footer ── */}
       <footer className="border-t border-border py-5 mt-4">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-between">
-          <span className="text-xs text-faint">
-            Leverage AI Smartly
+          <span className="text-xs text-faint w-1/3">
+            Lagom : Leverage AI Smartly not heavily
           </span>
-          <span className="text-xs text-faint/50">
+          <span className="text-xs text-faint/70 w-1/3 text-center">
+            Drufiy AI Pvt Ltd
+          </span>
+          <span className="text-xs text-faint/50 w-1/3 text-right">
             Free to use
           </span>
         </div>
