@@ -226,26 +226,21 @@ export default function Home() {
       <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            {/* Wireframe lattice logo */}
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <circle cx="16" cy="16" r="14" stroke="#22D3A0" strokeWidth="1.2" opacity="0.4"/>
-              <circle cx="16" cy="16" r="5" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="16" y1="11" x2="16" y2="2" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="16" y1="21" x2="16" y2="30" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="21" y1="16" x2="30" y2="16" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="11" y1="16" x2="2" y2="16" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="19.54" y1="12.46" x2="26.04" y2="5.96" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="12.46" y1="19.54" x2="5.96" y2="26.04" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="19.54" y1="19.54" x2="26.04" y2="26.04" stroke="#22D3A0" strokeWidth="1.2"/>
-              <line x1="12.46" y1="12.46" x2="5.96" y2="5.96" stroke="#22D3A0" strokeWidth="1.2"/>
-              <path d="M16 11 Q19 13.5 21 16" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
-              <path d="M21 16 Q18.5 19 16 21" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
-              <path d="M16 21 Q13 18.5 11 16" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
-              <path d="M11 16 Q13.5 13 16 11" stroke="#22D3A0" strokeWidth="1" opacity="0.6" fill="none"/>
-              <path d="M19.54 12.46 Q20 16 19.54 19.54" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
-              <path d="M19.54 19.54 Q16 20 12.46 19.54" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
-              <path d="M12.46 19.54 Q12 16 12.46 12.46" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
-              <path d="M12.46 12.46 Q16 12 19.54 12.46" stroke="#22D3A0" strokeWidth="1" opacity="0.4" fill="none"/>
+            {/* Sunflower wireframe logo — 8 open petal outlines + center ring */}
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+              <circle cx="16" cy="16" r="2.5" stroke="#22D3A0" strokeWidth="1.2" />
+              {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => (
+                <path
+                  key={angle}
+                  d="M 14.5,12 C 11.5,7 13,3 16,3 C 19,3 20.5,7 17.5,12"
+                  stroke="#22D3A0"
+                  strokeWidth="1.15"
+                  strokeLinecap="round"
+                  fill="none"
+                  transform={`rotate(${angle} 16 16)`}
+                  opacity={angle % 90 === 0 ? 1 : 0.6}
+                />
+              ))}
             </svg>
             <span className="font-serif italic font-bold text-[1.5rem] text-text leading-none tracking-tight">
               lagom
