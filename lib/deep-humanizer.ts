@@ -35,6 +35,11 @@ export type DeepEvent =
 
 export type EventEmitter = (event: DeepEvent) => void;
 
+const GEMINI_TIMEOUT_MS = 30_000;
+const MAX_DEEP_SESSIONS = 2;
+let activeDeepSessions = 0;
+const deepSessionWaiters: Array<() => void> = [];
+
 // ─── Banned vocab (mirrors prompts/pipeline.ts) ──────────────────────────────
 
 const BANNED_VOCAB_PROMPT = `
@@ -55,6 +60,39 @@ is always correct. Preserve technical domain terms (medical, scientific, legal).
 
 // ─── Gemini callers ──────────────────────────────────────────────────────────
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function acquireDeepSession(onEvent: EventEmitter): Promise<() => void> {
+  if (activeDeepSessions >= MAX_DEEP_SESSIONS) {
+    onEvent({ type: "status", message: "Queue: waiting for a free slot..." });
+    await new Promise<void>((resolve) => {
+      deepSessionWaiters.push(resolve);
+    });
+  }
+
+  activeDeepSessions++;
+
+  return () => {
+    activeDeepSessions = Math.max(0, activeDeepSessions - 1);
+    const next = deepSessionWaiters.shift();
+    if (next) next();
+  };
+}
+
 async function callGeminiPro(prompt: string): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
@@ -62,10 +100,14 @@ async function callGeminiPro(prompt: string): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-pro",
-    generationConfig: { temperature: 0.88, topP: 0.95, maxOutputTokens: 8192 },
+    generationConfig: { temperature: 0.88, topP: 0.95, maxOutputTokens: 3072 },
   });
 
-  const result = await model.generateContent(prompt);
+  const result = await withTimeout(
+    model.generateContent(prompt),
+    GEMINI_TIMEOUT_MS,
+    "Gemini pro call"
+  );
   return result.response.text().trim();
 }
 
@@ -76,10 +118,14 @@ async function callGeminiFlash(prompt: string): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
-    generationConfig: { temperature: 0.92, topP: 0.95, maxOutputTokens: 2048 },
+    generationConfig: { temperature: 0.92, topP: 0.95, maxOutputTokens: 512 },
   });
 
-  const result = await model.generateContent(prompt);
+  const result = await withTimeout(
+    model.generateContent(prompt),
+    GEMINI_TIMEOUT_MS,
+    "Gemini flash call"
+  );
   return result.response.text().trim();
 }
 
@@ -364,141 +410,147 @@ export async function humanizeDeep(
   options: { threshold?: number; maxIterations?: number } = {},
   onEvent: EventEmitter = () => {}
 ): Promise<DeepHumanizeResult> {
-  const { threshold = 5, maxIterations = 6 } = options;
-  const register = classifyRegister(inputText);
-  const originalWordCount = inputText.trim().split(/\s+/).length;
-  const targetWordCount = Math.min(originalWordCount, wordLimit);
+  const releaseSession = await acquireDeepSession(onEvent);
 
-  onEvent({ type: "status", message: "Running base humanization pipeline..." });
-  let current = await humanize(inputText, contentType, wordLimit);
+  try {
+    const { threshold = 5, maxIterations = 6 } = options;
+    const register = classifyRegister(inputText);
+    const originalWordCount = inputText.trim().split(/\s+/).length;
+    const targetWordCount = Math.min(originalWordCount, wordLimit);
 
-  const scoreHistory: AllScores[] = [];
-  let best: { text: string; combined: number; scores: AllScores | null } = {
-    text: current,
-    combined: 100,
-    scores: null,
-  };
+    onEvent({ type: "status", message: "Running base humanization pipeline..." });
+    let current = await humanize(inputText, contentType, wordLimit);
 
-  for (let iter = 0; iter < maxIterations; iter++) {
-    onEvent({
-      type: "status",
-      message: `Round ${iter + 1}/${maxIterations}: scoring against all 4 detectors...`,
-    });
+    const scoreHistory: AllScores[] = [];
+    let best: { text: string; combined: number; scores: AllScores | null } = {
+      text: current,
+      combined: 100,
+      scores: null,
+    };
 
-    const scores = await scoreAllDetectors(current);
-    scoreHistory.push(scores);
-
-    const max = maxScore(scores);
-    const avg = combinedScore(scores);
-
-    if (avg < best.combined) {
-      best = { text: current, combined: avg, scores };
-    }
-
-    onEvent({ type: "score", iteration: iter + 1, scores, bestCombined: best.combined });
-
-    console.log(`[deep iter ${iter + 1}] max=${max} avg=${avg.toFixed(0)} words=${current.split(/\s+/).length}`);
-
-    // Done only if:
-    //   1. At least one heavyweight (GPTZero or Originality) returned a valid score — so
-    //      we're not fooled into stopping early when both heavyweights silently failed.
-    //   2. All valid scores are ≤ threshold.
-    const validScores = getValidScores(scores);
-    const hasHeavyweight = validScores.some(s => s.name === "GPTZero" || s.name === "Originality");
-    if (max !== -1 && max <= threshold && hasHeavyweight) {
-      onEvent({ type: "status", message: `All detectors ≤ ${threshold}% — done.` });
-      break;
-    }
-    if (!hasHeavyweight) {
-      onEvent({ type: "status", message: `Heavyweights (GPTZero/Originality) did not return scores this round — continuing...` });
-    }
-
-    // Last iteration — no more work
-    if (iter === maxIterations - 1) break;
-
-    // ── TARGETED SURGERY: rewrite only flagged sentences ────────────────────
-    const flagged = collectFlaggedSentences(scores);
-    const worst = worstDetector(scores);
-
-    if (flagged.length > 0) {
+    for (let iter = 0; iter < maxIterations; iter++) {
       onEvent({
         type: "status",
-        message: `Found ${flagged.length} flagged sentence${flagged.length === 1 ? "" : "s"} — rewriting each...`,
+        message: `Round ${iter + 1}/${maxIterations}: scoring against all 4 detectors...`,
       });
 
-      let rewritten = current;
-      let spliceCount = 0;
+      const scores = await scoreAllDetectors(current);
+      scoreHistory.push(scores);
 
-      for (let i = 0; i < Math.min(flagged.length, 8); i++) {
-        const { sentence, detectors } = flagged[i];
-        const targetDetector = detectors[0] ?? worst;
-        const context = getSurroundingContext(rewritten, sentence);
+      const max = maxScore(scores);
+      const avg = combinedScore(scores);
+
+      if (avg < best.combined) {
+        best = { text: current, combined: avg, scores };
+      }
+
+      onEvent({ type: "score", iteration: iter + 1, scores, bestCombined: best.combined });
+
+      console.log(`[deep iter ${iter + 1}] max=${max} avg=${avg.toFixed(0)} words=${current.split(/\s+/).length}`);
+
+      // Done only if:
+      //   1. At least one heavyweight (GPTZero or Originality) returned a valid score — so
+      //      we're not fooled into stopping early when both heavyweights silently failed.
+      //   2. All valid scores are ≤ threshold.
+      const validScores = getValidScores(scores);
+      const hasHeavyweight = validScores.some(s => s.name === "GPTZero" || s.name === "Originality");
+      if (max !== -1 && max <= threshold && hasHeavyweight) {
+        onEvent({ type: "status", message: `All detectors ≤ ${threshold}% — done.` });
+        break;
+      }
+      if (!hasHeavyweight) {
+        onEvent({ type: "status", message: `Heavyweights (GPTZero/Originality) did not return scores this round — continuing...` });
+      }
+
+      // Last iteration — no more work
+      if (iter === maxIterations - 1) break;
+
+      // ── TARGETED SURGERY: rewrite only flagged sentences ────────────────────
+      const flagged = collectFlaggedSentences(scores);
+      const worst = worstDetector(scores);
+
+      if (flagged.length > 0) {
+        onEvent({
+          type: "status",
+          message: `Found ${flagged.length} flagged sentence${flagged.length === 1 ? "" : "s"} — rewriting each...`,
+        });
+
+        let rewritten = current;
+        let spliceCount = 0;
+
+        for (let i = 0; i < Math.min(flagged.length, 8); i++) {
+          const { sentence, detectors } = flagged[i];
+          const targetDetector = detectors[0] ?? worst;
+          const context = getSurroundingContext(rewritten, sentence);
+
+          try {
+            const newSentence = await rewriteFlaggedSentence(sentence, context, targetDetector, register);
+            if (newSentence && newSentence.length > 10) {
+              const spliced = spliceSentence(rewritten, sentence, newSentence);
+              if (spliced) {
+                rewritten = spliced;
+                spliceCount++;
+              }
+            }
+          } catch (err) {
+            console.log(`[deep surgery] rewrite failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        onEvent({
+          type: "status",
+          message: `Spliced ${spliceCount} rewritten sentences. Cleaning up...`,
+        });
+
+        current = applyDeterministicPasses(rewritten, register);
+      } else {
+        // ── FALLBACK: full-text re-mutation ────────────────────────────────────
+        onEvent({
+          type: "status",
+          message: `No flagged sentences extractable — targeting ${worst} (${scores[worstDetectorKey(worst)]?.score ?? 0}%) with full rewrite...`,
+        });
+
+        const currentWordCount = current.trim().split(/\s+/).length;
+        const aim = Math.max(targetWordCount, Math.round(currentWordCount * 0.97));
+        const prompt = buildFullTextRemutationPrompt(current, scores, worst, register, aim);
 
         try {
-          const newSentence = await rewriteFlaggedSentence(sentence, context, targetDetector, register);
-          if (newSentence && newSentence.length > 10) {
-            const spliced = spliceSentence(rewritten, sentence, newSentence);
-            if (spliced) {
-              rewritten = spliced;
-              spliceCount++;
-            }
+          const remutated = await callGeminiPro(prompt);
+          if (remutated && remutated.trim().length > 50) {
+            current = applyDeterministicPasses(remutated.trim(), register);
           }
         } catch (err) {
-          console.log(`[deep surgery] rewrite failed: ${err instanceof Error ? err.message : String(err)}`);
+          console.log(`[deep full-mutation] failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-      }
-
-      onEvent({
-        type: "status",
-        message: `Spliced ${spliceCount} rewritten sentences. Cleaning up...`,
-      });
-
-      current = applyDeterministicPasses(rewritten, register);
-    } else {
-      // ── FALLBACK: full-text re-mutation ────────────────────────────────────
-      onEvent({
-        type: "status",
-        message: `No flagged sentences extractable — targeting ${worst} (${scores[worstDetectorKey(worst)]?.score ?? 0}%) with full rewrite...`,
-      });
-
-      const currentWordCount = current.trim().split(/\s+/).length;
-      const aim = Math.max(targetWordCount, Math.round(currentWordCount * 0.97));
-      const prompt = buildFullTextRemutationPrompt(current, scores, worst, register, aim);
-
-      try {
-        const remutated = await callGeminiPro(prompt);
-        if (remutated && remutated.trim().length > 50) {
-          current = applyDeterministicPasses(remutated.trim(), register);
-        }
-      } catch (err) {
-        console.log(`[deep full-mutation] failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    const finalScores = best.scores ?? scoreHistory[scoreHistory.length - 1] ?? {
+      gptzero: { score: -1, label: "skipped", flaggedSentences: [] },
+      zerogpt: { score: -1, label: "skipped", flaggedSentences: [] },
+      quillbot: { score: -1, label: "skipped", flaggedSentences: [] },
+      originality: { score: -1, label: "skipped", flaggedSentences: [] },
+    };
+
+    const result: DeepHumanizeResult = {
+      text: best.text,
+      finalScores,
+      iterations: scoreHistory.length,
+      scoreHistory,
+    };
+
+    onEvent({
+      type: "result",
+      text: result.text,
+      finalScores: result.finalScores,
+      iterations: result.iterations,
+      scoreHistory: result.scoreHistory,
+    });
+
+    return result;
+  } finally {
+    releaseSession();
   }
-
-  const finalScores = best.scores ?? scoreHistory[scoreHistory.length - 1] ?? {
-    gptzero: { score: -1, label: "skipped", flaggedSentences: [] },
-    zerogpt: { score: -1, label: "skipped", flaggedSentences: [] },
-    quillbot: { score: -1, label: "skipped", flaggedSentences: [] },
-    originality: { score: -1, label: "skipped", flaggedSentences: [] },
-  };
-
-  const result: DeepHumanizeResult = {
-    text: best.text,
-    finalScores,
-    iterations: scoreHistory.length,
-    scoreHistory,
-  };
-
-  onEvent({
-    type: "result",
-    text: result.text,
-    finalScores: result.finalScores,
-    iterations: result.iterations,
-    scoreHistory: result.scoreHistory,
-  });
-
-  return result;
 }
 
 function worstDetectorKey(name: string): keyof AllScores {

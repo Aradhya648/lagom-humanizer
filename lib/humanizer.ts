@@ -166,16 +166,37 @@ interface GenSettings {
   temperature: number;
   topP: number;
   topK?: number;
+  maxOutputTokens?: number;
 }
 
-const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.85, topP: 0.95 };
-const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90 };
-const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92 };
+const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.85, topP: 0.95, maxOutputTokens: 1024 };
+const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90, maxOutputTokens: 1024 };
+const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutputTokens: 2048 };
+const GEMINI_TIMEOUT_MS = 30_000;
+const SHORT_FAST_PATH_WORDS = 120;
+const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 768 };
+const FAST_MODEL = "gemini-2.0-flash";
 
-// Stronger model for the mutation pass — better instruction following
-const MUTATION_MODEL = "gemini-2.5-pro";
+// Flash is materially faster here and the quality delta is negligible in fast mode.
+const MUTATION_MODEL = FAST_MODEL;
 
 // ─── Model Wrappers ───────────────────────────────────────────────────────────
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 async function callGemini(prompt: string, settings: GenSettings): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -183,16 +204,20 @@ async function callGemini(prompt: string, settings: GenSettings): Promise<string
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: FAST_MODEL,
     generationConfig: {
       temperature: settings.temperature,
       topP: settings.topP,
       topK: settings.topK,
-      maxOutputTokens: 4096,
+      maxOutputTokens: settings.maxOutputTokens ?? 1024,
     },
   });
 
-  const result = await model.generateContent(prompt);
+  const result = await withTimeout(
+    model.generateContent(prompt),
+    GEMINI_TIMEOUT_MS,
+    "Gemini flash call"
+  );
   const text = result.response.text();
   if (!text || text.trim().length === 0) {
     throw new Error("Gemini returned empty response");
@@ -208,6 +233,41 @@ async function callModel(prompt: string, settings: GenSettings): Promise<string>
 
 function validateChunkOutput(output: string, fallback: string): string {
   return output.trim().length > 0 ? output.trim() : fallback;
+}
+
+function getFastSinglePassPrompt(text: string, contentType: ContentType): string {
+  const registerNote =
+    contentType === "essay" || contentType === "academic"
+      ? "Keep a formal academic voice. No contractions. Use plain academic vocabulary."
+      : "Use a natural human voice. Contractions are fine where they sound natural.";
+
+  return `Rewrite this text so it reads like natural human writing, not AI-paraphrased text.
+
+${registerNote}
+
+Rules:
+- Preserve the exact meaning and all facts
+- Use plain, common vocabulary
+- Vary sentence length noticeably
+- Change repetitive sentence openings
+- Remove stiff filler phrases
+- Output only the rewritten text
+- Keep the result near the original length
+
+TEXT:
+${text}`;
+}
+
+async function singlePassHumanize(
+  text: string,
+  contentType: ContentType
+): Promise<string> {
+  try {
+    const output = await callModel(getFastSinglePassPrompt(text, contentType), SINGLE_PASS_SETTINGS);
+    return validateChunkOutput(output, text);
+  } catch {
+    return text;
+  }
 }
 
 // Pass 1 — Structural rewrite per chunk (parallel).
@@ -253,10 +313,14 @@ async function mutationPass(
     generationConfig: {
       temperature: MUTATION_SETTINGS.temperature,
       topP: MUTATION_SETTINGS.topP,
-      maxOutputTokens: 8192,
+      maxOutputTokens: MUTATION_SETTINGS.maxOutputTokens,
     },
   });
-  const result = await model.generateContent(getMutationPrompt(text, contentType));
+  const result = await withTimeout(
+    model.generateContent(getMutationPrompt(text, contentType)),
+    GEMINI_TIMEOUT_MS,
+    "Gemini mutation call"
+  );
   return result.response.text().trim() || text;
 }
 
@@ -909,6 +973,39 @@ function enforceLengthDiscipline(output: string, inputWordCount: number): string
   return kept.join(" ");
 }
 
+async function finishHumanizedText(
+  text: string,
+  register: SourceRegister,
+  inputWordCount: number
+): Promise<string> {
+  const cleaned = antiPatternPass(text, register);
+  const suppressed = rhetoricalSuppressionPass(cleaned);
+  const ngramBroken = zeroGPTNgramBreaker(suppressed);
+  const structPerplexed = structuralPerplexityInjector(ngramBroken, register);
+  const perplexed = perplexityInjector(structPerplexed, register);
+  const diverged = interParagraphDivergencePass(perplexed);
+  const bursty = burstinessInjector(diverged, register);
+  const emdashed = emDashInjector(bursty, register);
+  const opened = openerDiversityPass(emdashed);
+  const grammarClean = grammarAndDedupPass(opened);
+  const lengthCapped = enforceLengthDiscipline(grammarClean, inputWordCount);
+
+  const finalWordCount = lengthCapped.split(/\s+/).length;
+  if (finalWordCount < inputWordCount * 0.88) {
+    const targetWords = Math.round(inputWordCount * 0.97);
+    const expansionPrompt = `Expand this text to approximately ${targetWords} words by adding relevant elaboration, examples, or detail within existing sentences. Do NOT add new sections or change any facts. Preserve the exact register and style.
+
+Output only the expanded text. No preamble.
+
+TEXT:
+${lengthCapped}`;
+    const expanded = await callModel(expansionPrompt, { temperature: 0.70, topP: 0.90, maxOutputTokens: 1024 });
+    return enforceLengthDiscipline(expanded.trim() || lengthCapped, Math.round(inputWordCount * 1.05));
+  }
+
+  return lengthCapped;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function humanize(
@@ -920,6 +1017,11 @@ export async function humanize(
   const inputWordCount = truncated.split(/\s+/).length;
 
   const register = classifyRegister(truncated);
+  if (inputWordCount <= SHORT_FAST_PATH_WORDS) {
+    const singlePass = await singlePassHumanize(truncated, contentType);
+    return finishHumanizedText(singlePass, register, inputWordCount);
+  }
+
   const chunks = splitIntoVariableChunks(truncated);
 
   // Pass 1: Structural rewrite — parallel per chunk
@@ -936,55 +1038,5 @@ export async function humanize(
   const mutated = score > 20
     ? await mutationPass(merged, contentType)
     : merged;
-
-  // Pass 4: Anti-pattern cleanup
-  const cleaned = antiPatternPass(mutated, register);
-
-  // Pass 5: Rhetorical fluency suppression
-  const suppressed = rhetoricalSuppressionPass(cleaned);
-
-  // Pass 6: ZeroGPT n-gram breaker — 30 AI-pattern rules
-  const ngramBroken = zeroGPTNgramBreaker(suppressed);
-
-  // Pass 7: Structural perplexity — parentheticals, em-dashes, semicolons
-  const structPerplexed = structuralPerplexityInjector(ngramBroken, register);
-
-  // Pass 8: Word-level perplexity — up to 3 rare synonym swaps per paragraph
-  const perplexed = perplexityInjector(structPerplexed, register);
-
-  // Pass 9: Inter-paragraph divergence — Originality.ai cross-para vocabulary
-  const diverged = interParagraphDivergencePass(perplexed);
-
-  // Pass 10: GPTZero burstiness — force sentence-length variance
-  const bursty = burstinessInjector(diverged, register);
-
-  // Pass 11: Em-dash injection — raises per-token perplexity for GPTZero
-  const emdashed = emDashInjector(bursty, register);
-
-  // Pass 12: Opener diversity — no duplicate sentence-starting words
-  const opened = openerDiversityPass(emdashed);
-
-  // Pass 12.5: Grammar & dedup safety net — removes fragment sentences and
-  // duplicate bridge sentences that the deterministic injectors may leave.
-  const grammarClean = grammarAndDedupPass(opened);
-
-  // Pass 13: Length discipline (ceiling + floor)
-  const lengthCapped = enforceLengthDiscipline(grammarClean, inputWordCount);
-
-  // Pass 14: Expand if LLM compressed too aggressively (< 88% of original)
-  const finalWordCount = lengthCapped.split(/\s+/).length;
-  if (finalWordCount < inputWordCount * 0.88) {
-    const targetWords = Math.round(inputWordCount * 0.97);
-    const expansionPrompt = `Expand this text to approximately ${targetWords} words by adding relevant elaboration, examples, or detail within existing sentences. Do NOT add new sections or change any facts. Preserve the exact register and style.
-
-Output only the expanded text. No preamble.
-
-TEXT:
-${lengthCapped}`;
-    const expanded = await callModel(expansionPrompt, { temperature: 0.70, topP: 0.90 });
-    return enforceLengthDiscipline(expanded.trim() || lengthCapped, Math.round(inputWordCount * 1.05));
-  }
-
-  return lengthCapped;
+  return finishHumanizedText(mutated, register, inputWordCount);
 }
-
