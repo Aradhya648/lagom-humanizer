@@ -323,15 +323,17 @@ export default function Home() {
               <button
                 onClick={() => setDeepMode(d => !d)}
                 title={deepMode ? "Deep Mode on — 4-detector loop, ~60–90s" : "Enable Deep Mode — scores all detectors and iterates"}
-                style={deepMode ? { boxShadow: "0 0 12px rgba(34,211,160,0.25)" } : undefined}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
+                style={deepMode
+                  ? { boxShadow: "0 0 18px rgba(34,211,160,0.45), 0 0 6px rgba(34,211,160,0.3)" }
+                  : { boxShadow: "0 0 10px rgba(34,211,160,0.12)" }}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 ${
                   deepMode
                     ? "border-2 border-accent text-accent bg-accent-surface"
-                    : "border border-border text-muted hover:border-accent/30 hover:text-accent/80 hover:bg-accent-surface/50"
+                    : "border border-border text-muted hover:border-accent/40 hover:text-accent/80 hover:bg-accent-surface/50"
                 }`}
               >
                 <span className={`w-2 h-2 rounded-full ${deepMode ? "bg-accent animate-pulse-opacity" : "bg-faint/50"}`} />
-                · Deep
+                Deep Mode
               </button>
 
               {/* Humanize button */}
