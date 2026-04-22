@@ -198,7 +198,16 @@ export default function Home() {
         setInputScore({ score: data.originalScore, label: getLabelFromScore(data.originalScore) });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred");
+      const technical = err instanceof Error ? err.message : String(err);
+      const context = deepMode ? "Deep Humanize" : "Fast Humanize";
+      const userFacing = mapErrorMessage(technical);
+      setError(userFacing);
+      // Fire-and-forget: notify developers with technical details
+      fetch("/api/log-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ technical, context, userFacing }),
+      }).catch(() => {});
     } finally {
       setLoading(false);
     }
@@ -529,6 +538,21 @@ export default function Home() {
       </footer>
     </div>
   );
+}
+
+function mapErrorMessage(technical: string): string {
+  const t = technical.toLowerCase();
+  if (t.includes("load failed") || t.includes("failed to fetch") || t.includes("networkerror"))
+    return "Server overloaded — please try again later";
+  if (t.includes("deep humanize failed") || t.includes("http 5"))
+    return "Server overloaded — please try again later";
+  if (t.includes("no response stream"))
+    return "Something is wrong, please come back in some time";
+  if (t.includes("deep mode requires") || t.includes("next_public_deep_api_url"))
+    return "Server crashed, might take some time";
+  if (t.includes("http "))
+    return "Server unreachable";
+  return technical;
 }
 
 function getLabelFromScore(score: number): DetectionResult["label"] {
