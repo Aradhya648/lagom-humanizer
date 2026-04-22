@@ -527,6 +527,14 @@ export default function Home() {
       <section className="border-t border-border/50 mt-8">
         <div className="max-w-4xl mx-auto px-5 sm:px-8 py-12 sm:py-16 space-y-14">
 
+          {/* Beta Notice */}
+          <div className="rounded-xl border border-accent/30 bg-accent/5 px-5 py-4 flex items-start gap-3">
+            <span className="mt-0.5 text-accent text-base">&#9432;</span>
+            <p className="text-[15px] text-text/80 leading-relaxed">
+              <span className="font-semibold text-text">Beta Notice:</span> Deep Mode is fully optimised for ZeroGPT and QuillBot, guaranteeing less than 8% AI on every run.
+            </p>
+          </div>
+
           {/* Intro */}
           <div className="space-y-3">
             <p className="text-base text-muted leading-relaxed">
