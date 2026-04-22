@@ -8,12 +8,14 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   humanize,
+  roundTripHumanize,
   classifyRegister,
   antiPatternPass,
   rhetoricalSuppressionPass,
   zeroGPTNgramBreaker,
   openerDiversityPass,
   type SourceRegister,
+  type PivotLanguage,
 } from "@/lib/humanizer";
 import { scoreAllDetectors, type AllScores } from "@/lib/scrapers";
 import { type ContentType } from "@/prompts/pipeline";
@@ -529,26 +531,29 @@ export async function humanizeDeep(
       // Last iteration — no more work
       if (iter === maxIterations - 1) break;
 
-      // ── NUCLEAR RESET at iteration 3: if score still high, do a fresh full
-      // humanize pass instead of continuing micro-surgery on a bad base text.
-      // Micro-surgery is great for refining near-passing text, but when the
-      // statistical signature of the whole text is AI-like (e.g. ZeroGPT still
-      // at 30%+ after 3 rounds), we need to rethink the entire rewrite, not
-      // just patch sentences one at a time.
-      if (iter === 2 && avg > 15) {
+      // ── NUCLEAR RESET with PIVOT ROTATION: when micro-surgery plateaus,
+      // re-translate the ORIGINAL input through a DIFFERENT pivot language.
+      // Each pivot produces a different statistical signature, giving us
+      // multiple "shots" at evasion. iter 2→French, iter 3→German,
+      // iter 4→Portuguese, iter 5→Italian.
+      const pivotRotation: PivotLanguage[] = ["French", "German", "Portuguese", "Italian"];
+      if (iter >= 2 && iter <= 5 && avg > 10) {
+        const pivot = pivotRotation[iter - 2];
         onEvent({
           type: "status",
-          message: `Score still ${avg.toFixed(0)}% after 3 rounds — running fresh full humanization to break out of plateau...`,
+          message: `Score still ${avg.toFixed(0)}% — re-translating through ${pivot} pivot to change signature...`,
         });
         try {
-          const fresh = await humanize(inputText, contentType, wordLimit);
-          if (fresh && fresh.trim().split(/\s+/).length >= Math.ceil(originalWordCount * 0.85)) {
-            current = fresh;
-            console.log(`[deep iter ${iter + 1}] nuclear reset: fresh humanize produced ${current.split(/\s+/).length} words`);
-            continue; // go straight to next scoring round
+          const fresh = await roundTripHumanize(inputText, register, pivot);
+          const freshWords = fresh.trim().split(/\s+/).length;
+          if (fresh && freshWords >= Math.ceil(originalWordCount * 0.85)) {
+            current = applyDeterministicPasses(fresh, register);
+            console.log(`[deep iter ${iter + 1}] pivot reset (${pivot}) produced ${freshWords} words`);
+            continue;
           }
+          console.log(`[deep iter ${iter + 1}] pivot reset (${pivot}) too short: ${freshWords}/${originalWordCount} — falling through to surgery`);
         } catch (err) {
-          console.log(`[deep iter ${iter + 1}] nuclear reset failed:`, err instanceof Error ? err.message : String(err));
+          console.log(`[deep iter ${iter + 1}] pivot reset (${pivot}) failed:`, err instanceof Error ? err.message : String(err));
         }
       }
 

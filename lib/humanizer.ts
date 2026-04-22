@@ -1043,6 +1043,188 @@ ${current}`;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// ─── Translation Round-Trip Humanization ──────────────────────────────────────
+// Core insight: AI detectors (ZeroGPT, QuillBot, GPTZero) are trained on
+// direct AI output. When we translate English → Spanish → English, the
+// result has the statistical signature of TRANSLATED text, not AI text.
+// Different sentence structures, different collocations, different rhythm —
+// all native to human translation, foreign to AI detection models.
+
+export type PivotLanguage = "Spanish" | "French" | "German" | "Portuguese" | "Italian";
+
+const TRANSLATION_TEMP = 0.3;
+const BACK_TRANSLATION_TEMP = 0.4;
+
+interface PlaceholderMap {
+  [key: string]: string;
+}
+
+// Extract content that MUST NOT translate (URLs, emails, code, etc.)
+// Placeholders are ASCII-safe and survive translation unchanged.
+function extractPlaceholders(text: string): { stripped: string; map: PlaceholderMap } {
+  const map: PlaceholderMap = {};
+  let counter = 0;
+  const next = (prefix: string) => `ZZ${prefix}${counter++}ZZ`;
+
+  let result = text;
+
+  // URLs
+  result = result.replace(/https?:\/\/\S+/g, (m) => { const k = next("U"); map[k] = m; return k; });
+  // Emails
+  result = result.replace(/\b[\w.-]+@[\w.-]+\.\w+\b/g, (m) => { const k = next("E"); map[k] = m; return k; });
+  // Fenced code blocks
+  result = result.replace(/```[\s\S]*?```/g, (m) => { const k = next("C"); map[k] = m; return k; });
+  // Inline code
+  result = result.replace(/`[^`\n]+`/g, (m) => { const k = next("I"); map[k] = m; return k; });
+  // Currency amounts
+  result = result.replace(/\$\d+(?:[,.]\d+)*(?:\s*(?:million|billion|thousand|trillion|M|B|K))?/gi, (m) => { const k = next("M"); map[k] = m; return k; });
+  // Percentages (keep them — translation handles OK but number formatting varies)
+  result = result.replace(/\b\d+(?:\.\d+)?%/g, (m) => { const k = next("P"); map[k] = m; return k; });
+  // Years (4-digit)
+  result = result.replace(/\b(19|20)\d{2}\b/g, (m) => { const k = next("Y"); map[k] = m; return k; });
+
+  return { stripped: result, map };
+}
+
+function restorePlaceholders(text: string, map: PlaceholderMap): string {
+  let result = text;
+  for (const [key, value] of Object.entries(map)) {
+    // Replace all occurrences (translation might duplicate them, rarely)
+    result = result.split(key).join(value);
+  }
+  return result;
+}
+
+function getRegisterInstruction(register: SourceRegister): string {
+  switch (register) {
+    case "academic":
+      return "Formal academic English. No contractions. Plain academic vocabulary — no ornate synonyms.";
+    case "formal":
+      return "Formal professional English. No contractions. Plain business vocabulary.";
+    case "informal":
+      return "Casual conversational English. Contractions are welcome. Plain everyday words.";
+    case "neutral":
+    default:
+      return "Natural professional English. Contractions OK where they sound natural. Plain everyday vocabulary.";
+  }
+}
+
+async function translateToPivot(text: string, pivot: PivotLanguage): Promise<string> {
+  const prompt = `Translate the following English text to ${pivot}.
+
+CRITICAL RULES:
+- Translate literally and accurately
+- Preserve ALL numbers, names, dates, and technical terms EXACTLY
+- Keep any placeholder tokens (strings like ZZU0ZZ, ZZE1ZZ, ZZP2ZZ — patterns starting and ending with ZZ) UNCHANGED — do not translate them
+- Preserve paragraph breaks exactly
+- Output ONLY the ${pivot} translation. No preamble, no explanation.
+
+ENGLISH TEXT:
+${text}
+
+${pivot.toUpperCase()} TRANSLATION:`;
+
+  return callGemini(prompt, { temperature: TRANSLATION_TEMP, topP: 0.9, maxOutputTokens: 8192 });
+}
+
+async function translateFromPivot(text: string, pivot: PivotLanguage, register: SourceRegister): Promise<string> {
+  const registerInstruction = getRegisterInstruction(register);
+
+  const prompt = `Translate the following ${pivot} text to natural, fluent English.
+
+TONE/REGISTER:
+${registerInstruction}
+
+CRITICAL RULES:
+- Preserve the exact meaning and ALL facts (numbers, names, dates, technical terms)
+- Use PLAIN everyday English vocabulary — do NOT reach for ornate or academic-sounding synonyms
+- Avoid: "utilize", "leverage", "facilitate", "multifaceted", "pervasive", "permeate", "paramount", "profound", "myriad", "plethora", "furthermore", "moreover"
+- Keep any placeholder tokens (strings starting and ending with ZZ) UNCHANGED
+- Preserve paragraph breaks exactly
+- Do not add parenthetical asides, em-dash asides, or editorial comments
+- Keep sentence structure natural — do not paraphrase just to vary
+- Output ONLY the English translation. No preamble, no commentary.
+
+${pivot.toUpperCase()} TEXT:
+${text}
+
+ENGLISH TRANSLATION:`;
+
+  return callGemini(prompt, { temperature: BACK_TRANSLATION_TEMP, topP: 0.9, maxOutputTokens: 8192 });
+}
+
+// Final vocabulary scrub: catch any ornate words that survived the round-trip.
+// Case-preserving for sentence-start capitalization.
+function plainVocabScrubber(text: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/\butilize\b/g, "use"], [/\bUtilize\b/g, "Use"],
+    [/\butilizes\b/g, "uses"], [/\bUtilizes\b/g, "Uses"],
+    [/\butilized\b/g, "used"], [/\bUtilized\b/g, "Used"],
+    [/\butilizing\b/g, "using"], [/\bUtilizing\b/g, "Using"],
+    [/\bleverage\b/g, "use"], [/\bLeverage\b/g, "Use"],
+    [/\bleverages\b/g, "uses"], [/\bleveraged\b/g, "used"],
+    [/\bleveraging\b/g, "using"],
+    [/\bfacilitate\b/g, "help"], [/\bFacilitate\b/g, "Help"],
+    [/\bfacilitates\b/g, "helps"], [/\bfacilitated\b/g, "helped"],
+    [/\bfacilitating\b/g, "helping"],
+    [/\bmultifaceted\b/gi, "complex"],
+    [/\bpervasive\b/gi, "widespread"],
+    [/\bpermeate\b/gi, "reach into"],
+    [/\bpermeates\b/gi, "reaches into"],
+    [/\bpermeating\b/gi, "reaching into"],
+    [/\bparamount\b/gi, "key"],
+    [/\bprofound\b/gi, "deep"],
+    [/\bProfound\b/g, "Deep"],
+    [/\bintricate\b/gi, "complex"],
+    [/\bmyriad\b/gi, "many"],
+    [/\bplethora of\b/gi, "many"],
+    [/\bdelve into\b/gi, "examine"],
+    [/\bdelves into\b/gi, "examines"],
+    [/\bFurthermore,?\s*/g, ""],
+    [/\bfurthermore,?\s*/g, ""],
+    [/\bMoreover,?\s*/g, ""],
+    [/\bmoreover,?\s*/g, ""],
+    [/\bIn conclusion,?\s*/gi, ""],
+    [/\bIt is important to note that\s*/gi, ""],
+    [/\bIt is worth noting that\s*/gi, ""],
+  ];
+
+  let result = text;
+  for (const [pattern, replacement] of replacements) {
+    result = result.replace(pattern, replacement);
+  }
+
+  // Cleanup: fix empty-leading-comma / double-space artifacts from removals
+  result = result.replace(/\s{2,}/g, " ");
+  result = result.replace(/\n /g, "\n");
+  result = result.replace(/([.!?])\s+([a-z])/g, (_m, p, c) => `${p} ${c.toUpperCase()}`);
+  return result.trim();
+}
+
+// Main round-trip function. Handles placeholders, translation, restoration,
+// and final vocabulary cleanup. Returns the humanized text.
+export async function roundTripHumanize(
+  text: string,
+  register: SourceRegister,
+  pivot: PivotLanguage = "Spanish"
+): Promise<string> {
+  const { stripped, map } = extractPlaceholders(text);
+
+  // Step 1: English → pivot language
+  const pivotText = await translateToPivot(stripped, pivot);
+
+  // Step 2: pivot language → English (register-aware)
+  const backText = await translateFromPivot(pivotText, pivot, register);
+
+  // Step 3: Restore placeholders
+  const restored = restorePlaceholders(backText, map);
+
+  // Step 4: Final plain-vocab scrub (catches any ornate words that slipped through)
+  return plainVocabScrubber(restored);
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 export async function humanize(
   inputText: string,
   contentType: ContentType,
@@ -1050,34 +1232,32 @@ export async function humanize(
 ): Promise<string> {
   const truncated = truncateToWordLimit(inputText, wordLimit);
   const inputWordCount = truncated.split(/\s+/).length;
-
   const register = classifyRegister(truncated);
 
-  // Short texts: single-pass humanize (fast, fits in budget)
-  if (inputWordCount <= SHORT_FAST_PATH_WORDS) {
+  // Very short inputs (<30 words): skip round-trip — meaning drift risk is
+  // too high relative to quality gain. Use simple single-pass rewrite.
+  if (inputWordCount < 30) {
     const singlePass = await singlePassHumanize(truncated, contentType);
     return finishHumanizedText(singlePass, register, inputWordCount);
   }
 
-  // All other texts: full 3-pass pipeline.
-  // structural + semantic run in parallel per-chunk, so even 400-word texts
-  // finish in ~25-35s — well within the 60s maxDuration. The mid-path
-  // single-pass shortcut was removed because it sacrificed too much quality
-  // (weak prompt, missed mutation pass) to save ~10s that Vercel can afford.
-  const chunks = splitIntoVariableChunks(truncated);
-
-  // Pass 1: Structural rewrite — parallel per chunk
-  const structural = await structuralPass(chunks, contentType);
-
-  // Pass 2: Semantic naturalness — parallel per chunk (all content types)
-  const semantic = await semanticPass(structural, contentType);
-
-  // Merge chunks
-  const merged = semantic.join("\n\n");
-
-  // Pass 3: Mutation — always run, never gate on internal score.
-  // Our detectAI heuristic doesn't match ZeroGPT/QuillBot well enough to
-  // reliably skip mutation. One extra Gemini call (~8s) is always worth it.
-  const mutated = await mutationPass(merged, contentType);
-  return finishHumanizedText(mutated, register, inputWordCount);
+  // Main path: Spanish round-trip. This is where the detector-evasion
+  // magic happens — translated-back English has a statistical signature
+  // that ZeroGPT/QuillBot's classifiers don't recognize as AI.
+  try {
+    const roundTripped = await roundTripHumanize(truncated, register, "Spanish");
+    // Sanity check: if round-trip produced far less text than input,
+    // it likely truncated during translation — fall back to single-pass.
+    const outWords = roundTripped.trim().split(/\s+/).length;
+    if (outWords < Math.ceil(inputWordCount * 0.60)) {
+      console.warn(`[humanize] round-trip output too short (${outWords}/${inputWordCount}) — falling back to single-pass`);
+      const singlePass = await singlePassHumanize(truncated, contentType);
+      return finishHumanizedText(singlePass, register, inputWordCount);
+    }
+    return finishHumanizedText(roundTripped, register, inputWordCount);
+  } catch (err) {
+    console.error("[humanize] round-trip failed, falling back to single-pass:", err instanceof Error ? err.message : err);
+    const singlePass = await singlePassHumanize(truncated, contentType);
+    return finishHumanizedText(singlePass, register, inputWordCount);
+  }
 }
