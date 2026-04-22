@@ -81,6 +81,20 @@ export async function POST(req: NextRequest) {
         }
       }, 15_000);
 
+      // Hard session cap. If anything downstream hangs beyond this, we still
+      // emit a terminal error event + close the stream so the client isn't
+      // left waiting forever.
+      const SESSION_HARD_TIMEOUT_MS = 5 * 60_000; // 5 minutes
+      let finished = false;
+      const hardStop = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        console.error(`[humanize-deep route] session HARD TIMEOUT after ${SESSION_HARD_TIMEOUT_MS}ms`);
+        send({ type: "error", message: "Deep humanize took too long — please try a shorter input or try again." });
+        clearInterval(heartbeat);
+        try { controller.close(); } catch { /* already closed */ }
+      }, SESSION_HARD_TIMEOUT_MS);
+
       try {
         await humanizeDeep(
           text,
@@ -92,8 +106,10 @@ export async function POST(req: NextRequest) {
       } catch (err) {
         console.error("Humanize-deep error:", err);
         const message = err instanceof Error ? err.message : "Internal server error";
-        send({ type: "error", message });
+        if (!finished) send({ type: "error", message });
       } finally {
+        finished = true;
+        clearTimeout(hardStop);
         clearInterval(heartbeat);
         try {
           controller.close();

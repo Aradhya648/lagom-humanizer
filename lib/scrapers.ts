@@ -103,6 +103,102 @@ function fail(error: string): DetectorScore {
   return { score: -1, label: "error", error, flaggedSentences: [] };
 }
 
+// ─── Flagged-sentence sanitization ───────────────────────────────────────────
+// Detector pages contain a lot of UI chrome ("Upgrade to Premium", "Export to
+// PDF", "Humanize Text", etc.) that naive CSS selectors like
+// [class*="highlight"] sweep up alongside the actually-flagged sentences.
+// Feeding those strings back into the rewriter corrupts the text. These
+// helpers filter to ONLY real sentences from the user's input.
+
+const UI_CHROME_MARKERS = [
+  "upgrade to premium", "upgrade", "export to pdf", "export pdf",
+  "humanize text", "make it human", "make your text human",
+  "using ai text", "can be detected", "undetectable ai",
+  "highlighted text", "suspected to be", "most likely generated",
+  "characters", "words", "copy to clipboard", "try again",
+  "sign in", "sign up", "log in", "premium plan", "get started",
+  "what's next", "learn more", "see details",
+  "scan text", "analyze text", "detect text", "check text",
+];
+
+function looksLikeUIChrome(s: string): boolean {
+  const lower = s.toLowerCase();
+  for (const m of UI_CHROME_MARKERS) if (lower.includes(m)) return true;
+  // Dense camelCase / stitched-together UI (no spaces between sentences)
+  const noSpace = /[a-z][A-Z]/.test(s);
+  const multipleCaps = (s.match(/[A-Z][a-z]+[A-Z]/g) ?? []).length >= 2;
+  if (noSpace && multipleCaps) return true;
+  return false;
+}
+
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+}
+
+// Split the input text into candidate sentences
+function splitIntoSentences(text: string): string[] {
+  const parts = text.match(/[^.!?\n]+[.!?]+/g) ?? text.split(/\n+/);
+  return parts.map(p => p.trim()).filter(p => p.length >= 20 && p.length <= 400);
+}
+
+// Filter a raw list of flagged strings to those that actually appear in the
+// original input text. Also rejects UI chrome. Returns deduped results.
+function sanitizeFlaggedSentences(
+  raw: string[],
+  originalText: string,
+  opts: { maxLength?: number; maxCount?: number } = {},
+): string[] {
+  const maxLength = opts.maxLength ?? 300;
+  const maxCount = opts.maxCount ?? 8;
+
+  const inputSentences = splitIntoSentences(originalText);
+  const inputNorms = inputSentences.map(normalizeForMatch);
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of raw) {
+    const trimmed = candidate.trim();
+    if (trimmed.length < 20 || trimmed.length > maxLength) continue;
+    if (looksLikeUIChrome(trimmed)) continue;
+
+    const candNorm = normalizeForMatch(trimmed);
+    if (!candNorm) continue;
+    if (seen.has(candNorm)) continue;
+
+    // Must overlap substantially with ONE of the input sentences
+    let matched: string | null = null;
+    for (let i = 0; i < inputSentences.length; i++) {
+      const inNorm = inputNorms[i];
+      if (!inNorm) continue;
+      // Direct containment either way
+      if (inNorm.includes(candNorm) || candNorm.includes(inNorm)) {
+        matched = inputSentences[i];
+        break;
+      }
+      // Jaccard-ish token overlap for fuzzy cases
+      const a = new Set(candNorm.split(" "));
+      const b = new Set(inNorm.split(" "));
+      let shared = 0;
+      for (const tok of a) if (b.has(tok)) shared++;
+      const minSize = Math.min(a.size, b.size);
+      if (minSize >= 5 && shared / minSize >= 0.7) {
+        matched = inputSentences[i];
+        break;
+      }
+    }
+
+    if (!matched) continue;
+    const matchedNorm = normalizeForMatch(matched);
+    if (seen.has(matchedNorm)) continue;
+    seen.add(matchedNorm);
+    out.push(matched);
+    if (out.length >= maxCount) break;
+  }
+
+  return out;
+}
+
 // ─── GPTZero ─────────────────────────────────────────────────────────────────
 
 async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScore> {
@@ -208,11 +304,12 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
       return Array.from(new Set(results)).slice(0, 15);
     });
 
-    console.log("[gptzero] score:", score, "flagged:", flaggedSentences.length);
+    const cleanFlagged = sanitizeFlaggedSentences(flaggedSentences, text);
+    console.log("[gptzero] score:", score, "flagged-raw:", flaggedSentences.length, "flagged-clean:", cleanFlagged.length);
 
     return score === -1
       ? fail("GPTZero: could not parse score")
-      : { score, label: `${score}% AI`, flaggedSentences };
+      : { score, label: `${score}% AI`, flaggedSentences: cleanFlagged };
   } catch (err) {
     console.log("[gptzero] error:", err instanceof Error ? err.message : String(err));
     return fail(`GPTZero: ${err instanceof Error ? err.message : String(err)}`);
@@ -299,11 +396,12 @@ async function scrapeZeroGPTPage(page: Page, text: string): Promise<DetectorScor
       return Array.from(new Set(results)).slice(0, 15);
     });
 
-    console.log("[zerogpt] score:", score, "flagged:", flaggedSentences.length);
+    const cleanFlagged = sanitizeFlaggedSentences(flaggedSentences, text);
+    console.log("[zerogpt] score:", score, "flagged-raw:", flaggedSentences.length, "flagged-clean:", cleanFlagged.length);
 
     return score === -1
       ? fail("ZeroGPT: could not parse score")
-      : { score, label: `${score}% AI`, flaggedSentences };
+      : { score, label: `${score}% AI`, flaggedSentences: cleanFlagged };
   } catch (err) {
     console.log("[zerogpt] error:", err instanceof Error ? err.message : String(err));
     return fail(`ZeroGPT: ${err instanceof Error ? err.message : String(err)}`);
@@ -311,8 +409,19 @@ async function scrapeZeroGPTPage(page: Page, text: string): Promise<DetectorScor
 }
 
 // ─── QuillBot ────────────────────────────────────────────────────────────────
+// NOTE (2026-04-22): QuillBot's AI detector is now paywalled. The "Scan"
+// button renders as `<button disabled data-testid="aidr-lite-redirect-cta">`
+// and redirects unauthenticated users to a premium signup. No selector trick
+// gets around this — the button is disabled server-side until login.
+// We keep the function signature so the coordinator code is untouched, but
+// it returns {score: -1} immediately without launching Playwright work. This
+// saves ~30s per round and prevents the button-click timeout that used to
+// hang the pipeline.
+async function scrapeQuillBotPage(_page: Page, _text: string): Promise<DetectorScore> {
+  return { score: -1, label: "skipped (paywalled)", flaggedSentences: [] };
+}
 
-async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorScore> {
+async function _scrapeQuillBotPage_DEAD(page: Page, text: string): Promise<DetectorScore> {
   try {
     console.log("[quillbot] navigating...");
     await page.goto("https://quillbot.com/ai-content-detector", {
@@ -540,11 +649,12 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
       return Array.from(new Set(results)).slice(0, 15);
     });
 
-    console.log("[originality/writer] score:", score, "flagged:", flaggedSentences.length);
+    const cleanFlagged = sanitizeFlaggedSentences(flaggedSentences, text);
+    console.log("[originality/writer] score:", score, "flagged-raw:", flaggedSentences.length, "flagged-clean:", cleanFlagged.length);
 
     return score === -1
       ? fail("Writer: could not parse score")
-      : { score, label: `${score}% AI`, flaggedSentences };
+      : { score, label: `${score}% AI`, flaggedSentences: cleanFlagged };
   } catch (err) {
     console.log("[originality] error:", err instanceof Error ? err.message : String(err));
     return fail(`Writer: ${err instanceof Error ? err.message : String(err)}`);
@@ -600,30 +710,29 @@ export async function scoreAllDetectors(text: string): Promise<AllScores> {
     });
 
     try {
-      const [ctx1, ctx2, ctx3, ctx4] = await Promise.all([
-        newStealthContext(browser),
+      // Only 3 contexts now — QuillBot is paywalled so we skip it entirely
+      // (saves ~30s per round and RAM on Railway). Each scraper is still
+      // guarded with its own hard timeout so one hang can't stall the round.
+      const [ctx1, ctx2, ctx3] = await Promise.all([
         newStealthContext(browser),
         newStealthContext(browser),
         newStealthContext(browser),
       ]);
-
-      const [p1, p2, p3, p4] = await Promise.all([
+      const [p1, p2, p3] = await Promise.all([
         ctx1.newPage(),
         ctx2.newPage(),
         ctx3.newPage(),
-        ctx4.newPage(),
       ]);
 
-      // Each scraper is guarded with its own hard timeout so one hang can't stall the round.
-      const [gptzero, zerogpt, quillbot, originality] = await Promise.all([
+      const [gptzero, zerogpt, originality, quillbot] = await Promise.all([
         withScraperTimeout("gptzero", scrapeGPTZeroPage(p1, text)),
         withScraperTimeout("zerogpt", scrapeZeroGPTPage(p2, text)),
-        withScraperTimeout("quillbot", scrapeQuillBotPage(p3, text)),
-        withScraperTimeout("originality", scrapeOriginalityPage(p4, text)),
+        withScraperTimeout("originality", scrapeOriginalityPage(p3, text)),
+        scrapeQuillBotPage(null as unknown as Page, text), // fast stub, no browser
       ]);
 
-      console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score} originality=${originality.score}`);
-      console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} quillbot=${quillbot.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
+      console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score}(skipped) originality=${originality.score}`);
+      console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
 
       return { gptzero, zerogpt, quillbot, originality };
     } finally {

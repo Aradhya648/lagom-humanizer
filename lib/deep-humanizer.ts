@@ -472,52 +472,82 @@ export async function humanizeDeep(
 
       console.log(`[deep iter ${iter + 1}] max=${max} avg=${avg.toFixed(0)} words=${current.split(/\s+/).length}`);
 
-      // Done only if:
-      //   1. At least one heavyweight (GPTZero or Originality) returned a valid score — so
-      //      we're not fooled into stopping early when both heavyweights silently failed.
-      //   2. All valid scores are ≤ threshold.
+      // Done if we got ANY valid score AND all valid scores are ≤ threshold.
+      // (Previously required a "heavyweight" which caused infinite loops when
+      // GPTZero/Originality were flaky — any working detector is now enough.)
       const validScores = getValidScores(scores);
-      const hasHeavyweight = validScores.some(s => s.name === "GPTZero" || s.name === "Originality");
-      if (max !== -1 && max <= threshold && hasHeavyweight) {
-        onEvent({ type: "status", message: `All detectors ≤ ${threshold}% — done.` });
+      if (validScores.length > 0 && max !== -1 && max <= threshold) {
+        onEvent({ type: "status", message: `All working detectors ≤ ${threshold}% — done.` });
         break;
       }
-      if (!hasHeavyweight) {
-        onEvent({ type: "status", message: `Heavyweights (GPTZero/Originality) did not return scores this round — continuing...` });
+      if (validScores.length === 0) {
+        onEvent({ type: "status", message: `No detectors returned valid scores this round — continuing with internal heuristics...` });
       }
 
       // Last iteration — no more work
       if (iter === maxIterations - 1) break;
 
       // ── TARGETED SURGERY: rewrite only flagged sentences ────────────────────
-      const flagged = collectFlaggedSentences(scores);
+      // Dedup normalized sentences AND cap the total to avoid blow-ups.
+      const flaggedRaw = collectFlaggedSentences(scores);
+      const seenNorms = new Set<string>();
+      const flagged: typeof flaggedRaw = [];
+      for (const f of flaggedRaw) {
+        const n = normalize(f.sentence);
+        if (n.length < 20 || seenNorms.has(n)) continue;
+        seenNorms.add(n);
+        flagged.push(f);
+        if (flagged.length >= 5) break; // cap parallel rewrites
+      }
       const worst = worstDetector(scores);
 
       if (flagged.length > 0) {
         onEvent({
           type: "status",
-          message: `Found ${flagged.length} flagged sentence${flagged.length === 1 ? "" : "s"} — rewriting each...`,
+          message: `Found ${flagged.length} flagged sentence${flagged.length === 1 ? "" : "s"} — rewriting in parallel...`,
         });
 
+        // Rewrite ALL flagged sentences in parallel with allSettled so a
+        // single hung Gemini call can't stall the round. withTimeout inside
+        // callGeminiFlash caps each call at GEMINI_TIMEOUT_MS.
+        const rewrites = await Promise.allSettled(
+          flagged.map(({ sentence, detectors }) => {
+            const targetDetector = detectors[0] ?? worst;
+            const context = getSurroundingContext(current, sentence);
+            return rewriteFlaggedSentence(sentence, context, targetDetector, register)
+              .then(newSentence => ({ sentence, newSentence }));
+          }),
+        );
+
+        // Splice one at a time, guarding against duplicate insertions.
         let rewritten = current;
         let spliceCount = 0;
+        const splicedOriginals = new Set<string>();
+        const splicedReplacements = new Set<string>();
 
-        for (let i = 0; i < Math.min(flagged.length, 8); i++) {
-          const { sentence, detectors } = flagged[i];
-          const targetDetector = detectors[0] ?? worst;
-          const context = getSurroundingContext(rewritten, sentence);
+        for (const r of rewrites) {
+          if (r.status !== "fulfilled") {
+            console.log(`[deep surgery] rewrite rejected: ${r.reason?.message ?? r.reason}`);
+            continue;
+          }
+          const { sentence, newSentence } = r.value;
+          if (!newSentence || newSentence.length < 10) continue;
 
-          try {
-            const newSentence = await rewriteFlaggedSentence(sentence, context, targetDetector, register);
-            if (newSentence && newSentence.length > 10) {
-              const spliced = spliceSentence(rewritten, sentence, newSentence);
-              if (spliced) {
-                rewritten = spliced;
-                spliceCount++;
-              }
-            }
-          } catch (err) {
-            console.log(`[deep surgery] rewrite failed: ${err instanceof Error ? err.message : String(err)}`);
+          const origNorm = normalize(sentence);
+          const newNorm = normalize(newSentence);
+          // Skip if we already spliced this original, or if the "new"
+          // sentence is something we've already inserted (prevents the
+          // "This distinction matters. This distinction matters." bug).
+          if (splicedOriginals.has(origNorm)) continue;
+          if (splicedReplacements.has(newNorm)) continue;
+          if (origNorm === newNorm) continue; // no-op rewrite
+
+          const spliced = spliceSentence(rewritten, sentence, newSentence);
+          if (spliced && spliced !== rewritten) {
+            rewritten = spliced;
+            spliceCount++;
+            splicedOriginals.add(origNorm);
+            splicedReplacements.add(newNorm);
           }
         }
 
