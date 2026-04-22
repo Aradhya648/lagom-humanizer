@@ -1,9 +1,6 @@
 import { Resend } from "resend";
 
-const NOTIFY = [
-  "officialmaneeshawasthi@gmail.com",
-  "officialaradhyamishra1@gmail.com",
-];
+const NOTIFY = ["drufiyai001@gmail.com"];
 
 export async function sendErrorEmail(
   technical: string,
