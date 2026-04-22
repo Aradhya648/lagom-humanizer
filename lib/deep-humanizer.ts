@@ -188,10 +188,14 @@ FIX: Scrub ornate vocabulary. Add an em-dash aside or parenthetical.
 Vary sentence length — make it noticeably shorter OR longer than neighbors.
 Change the opening word.`,
 
-  ZeroGPT: `ZeroGPT flagged this sentence as AI based on phrase patterns.
-FIX: Remove any signpost phrases (furthermore, moreover, in conclusion, it is important).
-Rewrite with a distinct syntactic structure.
-Use active voice. Change the opening word.`,
+  ZeroGPT: `ZeroGPT scores text on PERPLEXITY (how predictable each word is) and BURSTINESS (sentence length variation). This sentence is too predictable — every word flows too smoothly from the last.
+FIX (choose two or more):
+- Start mid-thought without a setup clause (drop "It is clear that", "One of the most", etc.)
+- Use an unexpected but accurate word choice — not a synonym, a genuinely surprising fit
+- Add a short concrete detail or comparison that breaks the abstract flow
+- Split into one very short sentence (under 7 words) + one long one (over 25 words), OR merge two short sentences with an em-dash or semicolon
+- Use active voice with a specific subject instead of "it/this/there"
+- Add a mild human aside: "honestly", "in practice", "as a rule", "at least in most cases"`,
 
   QuillBot: `QuillBot flagged this as AI-refined text.
 FIX: Break the claim-support-conclusion pattern.
@@ -535,6 +539,29 @@ export async function humanizeDeep(
       // Last iteration — no more work
       if (iter === maxIterations - 1) break;
 
+      // ── NUCLEAR RESET at iteration 3: if score still high, do a fresh full
+      // humanize pass instead of continuing micro-surgery on a bad base text.
+      // Micro-surgery is great for refining near-passing text, but when the
+      // statistical signature of the whole text is AI-like (e.g. ZeroGPT still
+      // at 30%+ after 3 rounds), we need to rethink the entire rewrite, not
+      // just patch sentences one at a time.
+      if (iter === 2 && avg > 15) {
+        onEvent({
+          type: "status",
+          message: `Score still ${avg.toFixed(0)}% after 3 rounds — running fresh full humanization to break out of plateau...`,
+        });
+        try {
+          const fresh = await humanize(inputText, contentType, wordLimit);
+          if (fresh && fresh.trim().split(/\s+/).length >= Math.ceil(originalWordCount * 0.85)) {
+            current = fresh;
+            console.log(`[deep iter ${iter + 1}] nuclear reset: fresh humanize produced ${current.split(/\s+/).length} words`);
+            continue; // go straight to next scoring round
+          }
+        } catch (err) {
+          console.log(`[deep iter ${iter + 1}] nuclear reset failed:`, err instanceof Error ? err.message : String(err));
+        }
+      }
+
       // ── TARGETED SURGERY: rewrite only flagged sentences ────────────────────
       // Dedup normalized sentences AND cap the total to avoid blow-ups.
       const flaggedRaw = collectFlaggedSentences(scores);
@@ -545,7 +572,7 @@ export async function humanizeDeep(
         if (n.length < 20 || seenNorms.has(n)) continue;
         seenNorms.add(n);
         flagged.push(f);
-        if (flagged.length >= 5) break; // cap parallel rewrites
+        if (flagged.length >= 12) break; // cap parallel rewrites (was 5 — raising to 12 so we fix more sentences per round)
       }
       const worst = worstDetector(scores);
 

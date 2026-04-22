@@ -174,7 +174,6 @@ const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90, maxOutp
 const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutputTokens: 4096 };
 const GEMINI_TIMEOUT_MS = 30_000;
 const SHORT_FAST_PATH_WORDS = 120;
-const MID_FAST_PATH_WORDS = 450;
 const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 4096 };
 const FAST_MODEL = "gemini-2.5-flash";
 
@@ -237,23 +236,27 @@ function validateChunkOutput(output: string, fallback: string): string {
 }
 
 function getFastSinglePassPrompt(text: string, contentType: ContentType): string {
-  const registerNote =
-    contentType === "essay" || contentType === "academic"
-      ? "Keep a formal academic voice. No contractions. Use plain academic vocabulary."
-      : "Use a natural human voice. Contractions are fine where they sound natural.";
+  const isFormal = contentType === "essay" || contentType === "academic";
+  const registerNote = isFormal
+    ? "REGISTER: Formal academic. No contractions. Plain academic vocabulary only — no ornate synonyms."
+    : "REGISTER: Natural educated voice. Contractions welcome. Plain everyday vocabulary.";
 
-  return `Rewrite this text so it reads like natural human writing, not AI-paraphrased text.
+  return `Rewrite this text to defeat AI detectors (ZeroGPT, QuillBot, GPTZero).
 
 ${registerNote}
 
-Rules:
-- Preserve the exact meaning and all facts
-- Use plain, common vocabulary
-- Vary sentence length noticeably
-- Change repetitive sentence openings
-- Remove stiff filler phrases
-- Output only the rewritten text
-- Keep the result near the original length
+WHAT AI DETECTORS CATCH — fix ALL of these:
+1. PREDICTABLE WORD CHOICES — every word flows too smoothly from the last. Use unexpected but accurate word choices. Avoid ornate vocabulary (utilize→use, leverage→use, moreover→also, furthermore→also).
+2. UNIFORM SENTENCE LENGTHS — all sentences near the same word count. Force extremes: one sentence under 8 words, one over 28 words per paragraph.
+3. SIGNPOST PHRASES — remove: "furthermore", "moreover", "in conclusion", "it is important to note", "it is worth mentioning", "in today's world".
+4. ABSTRACT CLAIMS — replace at least one abstract claim with a concrete specific detail.
+5. REPEATED SENTENCE OPENERS — no two consecutive sentences start with the same word.
+6. MISSING HUMAN VOICE — add one natural aside: "honestly", "in practice", "at least in theory", "as a rule", or "worth noting".
+
+HARD RULES:
+- Preserve ALL facts and meaning exactly
+- Output ONLY the rewritten text — no preamble
+- Keep result near original length (±10%)
 
 TEXT:
 ${text}`;
@@ -767,10 +770,17 @@ export function burstinessInjector(text: string, register: SourceRegister): stri
     // Strategy B: Bridge injection — only ONCE per full pass (not per
     // paragraph) to avoid literal duplicate sentences like "The data
     // confirms this." appearing multiple times.
+    // Also: skip if ANY bridge phrase already exists in this paragraph
+    // (prevents "That part matters. That part matters." from accumulating
+    // across multiple applyDeterministicPasses calls over iterations).
     if (!didModify && modified.length >= 3 && totalInjections === 0) {
       const bridge = bridges[pIdx % bridges.length];
-      modified.splice(1, 0, bridge);
-      totalInjections++;
+      const paraText = modified.join(" ").toLowerCase();
+      const bridgeAlreadyPresent = bridges.some(b => paraText.includes(b.toLowerCase().slice(0, -1)));
+      if (!bridgeAlreadyPresent) {
+        modified.splice(1, 0, bridge);
+        totalInjections++;
+      }
     }
 
     return modified.join(" ");
@@ -1034,23 +1044,18 @@ export async function humanize(
   const inputWordCount = truncated.split(/\s+/).length;
 
   const register = classifyRegister(truncated);
+
+  // Short texts: single-pass humanize (fast, fits in budget)
   if (inputWordCount <= SHORT_FAST_PATH_WORDS) {
     const singlePass = await singlePassHumanize(truncated, contentType);
     return finishHumanizedText(singlePass, register, inputWordCount);
   }
 
-  // Mid-length texts should stay comfortably under Vercel's runtime budget.
-  // A full chunk-by-chunk pipeline on ~400 words can exceed 60s, so use a
-  // whole-text rewrite first and only pay for mutation if the score is still high.
-  if (inputWordCount <= MID_FAST_PATH_WORDS) {
-    const singlePass = await singlePassHumanize(truncated, contentType);
-    const { score } = detectAI(singlePass);
-    const maybeMutated = score > 35
-      ? await mutationPass(singlePass, contentType)
-      : singlePass;
-    return finishHumanizedText(maybeMutated, register, inputWordCount);
-  }
-
+  // All other texts: full 3-pass pipeline.
+  // structural + semantic run in parallel per-chunk, so even 400-word texts
+  // finish in ~25-35s — well within the 60s maxDuration. The mid-path
+  // single-pass shortcut was removed because it sacrificed too much quality
+  // (weak prompt, missed mutation pass) to save ~10s that Vercel can afford.
   const chunks = splitIntoVariableChunks(truncated);
 
   // Pass 1: Structural rewrite — parallel per chunk
@@ -1062,10 +1067,9 @@ export async function humanize(
   // Merge chunks
   const merged = semantic.join("\n\n");
 
-  // Pass 3: Targeted mutation on full text — only if score > 20
-  const { score } = detectAI(merged);
-  const mutated = score > 20
-    ? await mutationPass(merged, contentType)
-    : merged;
+  // Pass 3: Mutation — always run, never gate on internal score.
+  // Our detectAI heuristic doesn't match ZeroGPT/QuillBot well enough to
+  // reliably skip mutation. One extra Gemini call (~8s) is always worth it.
+  const mutated = await mutationPass(merged, contentType);
   return finishHumanizedText(mutated, register, inputWordCount);
 }
