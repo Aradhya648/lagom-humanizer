@@ -81,36 +81,25 @@ export async function POST(req: NextRequest) {
         }
       }, 15_000);
 
-      // Soft abort (~4:30) tells humanizeDeep to stop cleanly and emit its
-      // best-so-far result. Hard stop (~5:30) is the absolute backstop that
-      // fires an error event if the soft path didn't finish in time.
-      const SOFT_ABORT_MS = 4 * 60_000 + 30_000;   // 4:30
-      const HARD_STOP_MS  = 5 * 60_000 + 30_000;   // 5:30
+      // Railway has no function timeout — use a generous runaway guard only.
+      const RUNAWAY_GUARD_MS = 10 * 60_000; // 10 min — absolute backstop
       let finished = false;
-
-      const abortController = new AbortController();
-      const softTimer = setTimeout(() => {
-        if (!finished) {
-          console.log(`[humanize-deep route] soft-abort at ${SOFT_ABORT_MS}ms — asking pipeline to return best-so-far`);
-          abortController.abort();
-        }
-      }, SOFT_ABORT_MS);
 
       const hardTimer = setTimeout(() => {
         if (finished) return;
         finished = true;
-        console.error(`[humanize-deep route] session HARD TIMEOUT after ${HARD_STOP_MS}ms`);
+        console.error(`[deep route] runaway guard fired after ${RUNAWAY_GUARD_MS}ms`);
         send({ type: "error", message: "Deep humanize took too long — please try a shorter input or try again." });
         clearInterval(heartbeat);
         try { controller.close(); } catch { /* already closed */ }
-      }, HARD_STOP_MS);
+      }, RUNAWAY_GUARD_MS);
 
       try {
         await humanizeDeep(
           text,
           contentType as ContentType,
           limit,
-          { threshold: thresh, maxIterations: maxIter, abortSignal: abortController.signal },
+          { threshold: thresh, maxIterations: maxIter },
           send,
         );
       } catch (err) {
@@ -119,7 +108,6 @@ export async function POST(req: NextRequest) {
         if (!finished) send({ type: "error", message });
       } finally {
         finished = true;
-        clearTimeout(softTimer);
         clearTimeout(hardTimer);
         clearInterval(heartbeat);
         try {

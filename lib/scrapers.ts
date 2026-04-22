@@ -157,7 +157,18 @@ function sanitizeFlaggedSentences(
   const out: string[] = [];
   const seen = new Set<string>();
 
-  for (const candidate of raw) {
+  // Expand each raw candidate into its individual sentences. Detector UIs
+  // often concatenate several flagged sentences into one highlight span, and
+  // if we pass that to the single-sentence rewriter it collapses 4 sentences
+  // into 1 — destroying word count. Splitting first preserves length.
+  const expanded: string[] = [];
+  for (const c of raw) {
+    const pieces = (c.match(/[^.!?\n]+[.!?]+/g) ?? [c]).map(s => s.trim()).filter(Boolean);
+    if (pieces.length > 0) expanded.push(...pieces);
+    else expanded.push(c.trim());
+  }
+
+  for (const candidate of expanded) {
     const trimmed = candidate.trim();
     if (trimmed.length < 20 || trimmed.length > maxLength) continue;
     if (looksLikeUIChrome(trimmed)) continue;
@@ -409,25 +420,17 @@ async function scrapeZeroGPTPage(page: Page, text: string): Promise<DetectorScor
 }
 
 // ─── QuillBot ────────────────────────────────────────────────────────────────
-// NOTE (2026-04-22): QuillBot's AI detector is now paywalled. The "Scan"
-// button renders as `<button disabled data-testid="aidr-lite-redirect-cta">`
-// and redirects unauthenticated users to a premium signup. No selector trick
-// gets around this — the button is disabled server-side until login.
-// We keep the function signature so the coordinator code is untouched, but
-// it returns {score: -1} immediately without launching Playwright work. This
-// saves ~30s per round and prevents the button-click timeout that used to
-// hang the pipeline.
-async function scrapeQuillBotPage(_page: Page, _text: string): Promise<DetectorScore> {
-  return { score: -1, label: "skipped (paywalled)", flaggedSentences: [] };
-}
-
-async function _scrapeQuillBotPage_DEAD(page: Page, text: string): Promise<DetectorScore> {
+async function scrapeQuillBotPage(page: Page, text: string): Promise<DetectorScore> {
   try {
     console.log("[quillbot] navigating...");
-    await page.goto("https://quillbot.com/ai-content-detector", {
+    const response = await page.goto("https://quillbot.com/ai-content-detector", {
       waitUntil: "domcontentloaded",
       timeout: TIMEOUT,
     });
+    if (response && !response.ok()) {
+      console.log("[quillbot] non-200 response:", response.status());
+      return { score: -1, label: `http ${response.status()}`, flaggedSentences: [] };
+    }
     console.log("[quillbot] title:", await page.title());
     await dismissCookies(page);
     await page.waitForTimeout(2500);  // React hydration
@@ -477,6 +480,11 @@ async function _scrapeQuillBotPage_DEAD(page: Page, text: string): Promise<Detec
     const btnFound = await scanBtn.isVisible({ timeout: 8000 }).catch(() => false);
     console.log("[quillbot] scanBtn found:", btnFound);
     if (!btnFound) return fail("QuillBot: scan button not found");
+    const btnDisabled = await scanBtn.isDisabled().catch(() => false);
+    if (btnDisabled) {
+      console.log("[quillbot] scan button disabled — likely paywall redirect");
+      return { score: -1, label: "paywalled", flaggedSentences: [] };
+    }
 
     await scanBtn.scrollIntoViewIfNeeded().catch(() => null);
     await scanBtn.click({ force: true, timeout: 15000 });
@@ -664,11 +672,9 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
 // ─── Coordinator ─────────────────────────────────────────────────────────────
 
 // Per-scraper hard ceiling — no individual detector can block the round longer than this.
-// 45s is enough: goto (≤10s) + form fill (~1s) + wait_for_result (~8s) + parse (~1s) + slack.
-const SCRAPER_HARD_TIMEOUT_MS = 45_000;
-// Whole-round hard ceiling. Now that QuillBot is a no-op stub, we only run
-// 3 scrapers in parallel — tighter cap is safe and keeps iterations fast.
-const SCORE_ALL_HARD_TIMEOUT_MS = 70_000;
+const SCRAPER_HARD_TIMEOUT_MS = 60_000;
+// Whole-round hard ceiling for all four detectors on Railway.
+const SCORE_ALL_HARD_TIMEOUT_MS = 120_000;
 
 function withScraperTimeout(
   name: string,
@@ -712,29 +718,34 @@ export async function scoreAllDetectors(text: string): Promise<AllScores> {
     });
 
     try {
-      // Only 3 contexts now — QuillBot is paywalled so we skip it entirely
-      // (saves ~30s per round and RAM on Railway). Each scraper is still
-      // guarded with its own hard timeout so one hang can't stall the round.
-      const [ctx1, ctx2, ctx3] = await Promise.all([
-        newStealthContext(browser),
-        newStealthContext(browser),
-        newStealthContext(browser),
-      ]);
-      const [p1, p2, p3] = await Promise.all([
-        ctx1.newPage(),
-        ctx2.newPage(),
-        ctx3.newPage(),
+      const runDetector = async (
+        name: string,
+        scraper: (page: Page, input: string) => Promise<DetectorScore>,
+      ): Promise<DetectorScore> => {
+        let ctx: BrowserContext | null = null;
+        let page: Page | null = null;
+        try {
+          ctx = await newStealthContext(browser);
+          page = await ctx.newPage();
+          return await withScraperTimeout(name, scraper(page, text));
+        } catch (err) {
+          console.log(`[${name}] setup error:`, err instanceof Error ? err.message : String(err));
+          return { score: -1, label: `${name}: setup error`, flaggedSentences: [] };
+        } finally {
+          if (page) await page.close().catch(() => null);
+          if (ctx) await ctx.close().catch(() => null);
+        }
+      };
+
+      const [gptzero, zerogpt, quillbot, originality] = await Promise.all([
+        runDetector("gptzero", scrapeGPTZeroPage),
+        runDetector("zerogpt", scrapeZeroGPTPage),
+        runDetector("quillbot", scrapeQuillBotPage),
+        runDetector("originality", scrapeOriginalityPage),
       ]);
 
-      const [gptzero, zerogpt, originality, quillbot] = await Promise.all([
-        withScraperTimeout("gptzero", scrapeGPTZeroPage(p1, text)),
-        withScraperTimeout("zerogpt", scrapeZeroGPTPage(p2, text)),
-        withScraperTimeout("originality", scrapeOriginalityPage(p3, text)),
-        scrapeQuillBotPage(null as unknown as Page, text), // fast stub, no browser
-      ]);
-
-      console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score}(skipped) originality=${originality.score}`);
-      console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
+      console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score} originality=${originality.score}`);
+      console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} quillbot=${quillbot.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
 
       return { gptzero, zerogpt, quillbot, originality };
     } finally {
@@ -771,9 +782,11 @@ export async function scrapeSingleDetector(
   detector: keyof AllScores
 ): Promise<DetectorScore> {
   const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
+  let ctx: BrowserContext | null = null;
+  let page: Page | null = null;
   try {
-    const ctx = await newStealthContext(browser);
-    const page = await ctx.newPage();
+    ctx = await newStealthContext(browser);
+    page = await ctx.newPage();
     const scrapers = {
       gptzero: scrapeGPTZeroPage,
       zerogpt: scrapeZeroGPTPage,
@@ -782,6 +795,8 @@ export async function scrapeSingleDetector(
     };
     return await scrapers[detector](page, text);
   } finally {
-    await browser.close();
+    if (page) await page.close().catch(() => null);
+    if (ctx) await ctx.close().catch(() => null);
+    await browser.close().catch(() => null);
   }
 }

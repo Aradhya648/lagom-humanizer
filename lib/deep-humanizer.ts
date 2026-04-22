@@ -262,6 +262,29 @@ function spliceSentence(text: string, target: string, replacement: string): stri
   return text.slice(0, loc.start) + replacement + text.slice(loc.end);
 }
 
+function trimToSentenceBoundary(text: string, maxWords: number): string {
+  const words = text.trim().split(/\s+/);
+  if (words.length <= maxWords) return text.trim();
+
+  const sentences = text.match(/[^.!?]+[.!?]+(?:\s+|$)/g) ?? [text];
+  const kept: string[] = [];
+  let count = 0;
+
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.trim().split(/\s+/).filter(Boolean);
+    if (kept.length > 0 && count + sentenceWords.length > maxWords) break;
+    kept.push(sentence.trim());
+    count += sentenceWords.length;
+    if (count >= maxWords) break;
+  }
+
+  if (kept.length === 0) {
+    return words.slice(0, maxWords).join(" ");
+  }
+
+  return kept.join(" ").trim();
+}
+
 // ─── Flagged sentence rewrite ────────────────────────────────────────────────
 
 async function rewriteFlaggedSentence(
@@ -303,12 +326,22 @@ REQUIREMENTS:
 
 REWRITTEN SENTENCE:`;
 
-  const result = await callGeminiFlash(prompt);
-  // Clean up: remove quotes, preambles
-  return result
-    .replace(/^["'`]|["'`]$/g, "")
-    .replace(/^(Here(?:'s| is).*?:|Rewritten sentence:|Sentence:)\s*/i, "")
-    .trim();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const result = await callGeminiFlash(prompt);
+      const cleaned = result
+        .replace(/^["'`]|["'`]$/g, "")
+        .replace(/^(Here(?:'s| is).*?:|Rewritten sentence:|Sentence:)\s*/i, "")
+        .trim();
+      if (cleaned.length > 0) return cleaned;
+    } catch (err) {
+      if (attempt === 1) {
+        console.log(`[deep rewrite] ${detectorName} retry exhausted:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
+  return sentence;
 }
 
 // ─── Full-text fallback re-mutation ──────────────────────────────────────────
@@ -431,17 +464,13 @@ export async function humanizeDeep(
   inputText: string,
   contentType: ContentType,
   wordLimit: number,
-  options: { threshold?: number; maxIterations?: number; abortSignal?: AbortSignal } = {},
+  options: { threshold?: number; maxIterations?: number } = {},
   onEvent: EventEmitter = () => {}
 ): Promise<DeepHumanizeResult> {
   const releaseSession = await acquireDeepSession(onEvent);
 
   try {
-    // maxIterations: 3 is the sweet spot. Empirically, most score improvement
-    // lands in rounds 1-2; rounds 4+ see diminishing returns AND blow past
-    // the route's 5-min hard timeout on longer inputs (800+ words → each
-    // round is ~90-120s between Playwright scoring + Gemini rewrites).
-    const { threshold = 5, maxIterations = 3, abortSignal } = options;
+    const { threshold = 5, maxIterations = 6 } = options;
     const register = classifyRegister(inputText);
     const originalWordCount = inputText.trim().split(/\s+/).length;
     const targetWordCount = Math.min(originalWordCount, wordLimit);
@@ -455,15 +484,9 @@ export async function humanizeDeep(
       combined: 100,
       scores: null,
     };
+    let noDetectorSignalRounds = 0;
 
     for (let iter = 0; iter < maxIterations; iter++) {
-      // Soft-abort: route handler signals us ~30s before the hard timeout
-      // so we can stop cleanly and emit the best-so-far result.
-      if (abortSignal?.aborted) {
-        onEvent({ type: "status", message: `Stopping early to return best result so far...` });
-        break;
-      }
-
       onEvent({
         type: "status",
         message: `Round ${iter + 1}/${maxIterations}: scoring against all 4 detectors...`,
@@ -475,8 +498,15 @@ export async function humanizeDeep(
       const max = maxScore(scores);
       const avg = combinedScore(scores);
 
-      if (avg < best.combined) {
+      // Only accept a new "best" if the text is reasonably close to the
+      // original length (≥ 85%). Otherwise a truncated/botched rewrite
+      // with low score wins, and the user gets 132 words out of 390 in.
+      const currentWords = current.trim().split(/\s+/).length;
+      const lengthOK = currentWords >= Math.ceil(originalWordCount * 0.85);
+      if (avg < best.combined && lengthOK) {
         best = { text: current, combined: avg, scores };
+      } else if (!lengthOK) {
+        console.log(`[deep iter ${iter + 1}] REJECTING as best: words=${currentWords} < 85% of original (${originalWordCount})`);
       }
 
       onEvent({ type: "score", iteration: iter + 1, scores, bestCombined: best.combined });
@@ -492,7 +522,14 @@ export async function humanizeDeep(
         break;
       }
       if (validScores.length === 0) {
-        onEvent({ type: "status", message: `No detectors returned valid scores this round — continuing with internal heuristics...` });
+        noDetectorSignalRounds++;
+        if (noDetectorSignalRounds >= 2) {
+          onEvent({ type: "status", message: "Warning: all detectors returned -1 twice — returning best-so-far to avoid a dead loop." });
+          break;
+        }
+        onEvent({ type: "status", message: "Warning: all detectors returned -1 this round — retrying once before returning best-so-far." });
+      } else {
+        noDetectorSignalRounds = 0;
       }
 
       // Last iteration — no more work
@@ -590,6 +627,29 @@ export async function humanizeDeep(
       }
     }
 
+    // Safety net: if best.text is significantly shorter than the original,
+    // ask Gemini to expand it back while preserving facts and style.
+    let finalText = best.text;
+    const bestWords = finalText.trim().split(/\s+/).length;
+    if (bestWords < Math.ceil(originalWordCount * 0.85)) {
+      onEvent({ type: "status", message: `Output shorter than input (${bestWords}/${originalWordCount}) — expanding back to target length...` });
+      try {
+        const expansionPrompt = `Expand this text to approximately ${originalWordCount} words by adding relevant elaboration, examples, and detail WITHIN the existing sentences and paragraphs. Do NOT add new sections, new topics, or change any facts. Preserve the exact register, voice, and style. Output ONLY the expanded text — no preamble.
+
+TEXT:
+${finalText}`;
+        const expanded = await callGeminiFlash(expansionPrompt);
+        if (expanded && expanded.split(/\s+/).length >= bestWords) {
+          finalText = applyDeterministicPasses(expanded.trim(), register);
+        }
+      } catch (err) {
+        console.log(`[deep expansion] failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const hardCeiling = Math.round(originalWordCount * 1.12);
+    finalText = trimToSentenceBoundary(finalText, hardCeiling);
+
     const finalScores = best.scores ?? scoreHistory[scoreHistory.length - 1] ?? {
       gptzero: { score: -1, label: "skipped", flaggedSentences: [] },
       zerogpt: { score: -1, label: "skipped", flaggedSentences: [] },
@@ -598,7 +658,7 @@ export async function humanizeDeep(
     };
 
     const result: DeepHumanizeResult = {
-      text: best.text,
+      text: finalText,
       finalScores,
       iterations: scoreHistory.length,
       scoreHistory,

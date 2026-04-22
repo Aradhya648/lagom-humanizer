@@ -990,20 +990,36 @@ async function finishHumanizedText(
   const grammarClean = grammarAndDedupPass(opened);
   const lengthCapped = enforceLengthDiscipline(grammarClean, inputWordCount);
 
-  const finalWordCount = lengthCapped.split(/\s+/).length;
-  if (finalWordCount < inputWordCount * 0.88) {
-    const targetWords = Math.round(inputWordCount * 0.97);
-    const expansionPrompt = `Expand this text to approximately ${targetWords} words by adding relevant elaboration, examples, or detail within existing sentences. Do NOT add new sections or change any facts. Preserve the exact register and style.
+  // Length discipline: expand iteratively until we clear the 92% floor, or
+  // we've tried twice (each Gemini call costs ~5s + we don't want to spin
+  // forever if the model refuses to comply).
+  const MIN_ACCEPTABLE = Math.ceil(inputWordCount * 0.92);
+  const TARGET = Math.round(inputWordCount * 0.98);
+  const HARD_CEILING = Math.round(inputWordCount * 1.12);
 
-Output only the expanded text. No preamble.
+  let current = lengthCapped;
+  let currentWords = current.split(/\s+/).length;
+
+  for (let attempt = 0; attempt < 2 && currentWords < MIN_ACCEPTABLE; attempt++) {
+    const deficit = inputWordCount - currentWords;
+    const expansionPrompt = `Expand this text to approximately ${TARGET} words (currently ${currentWords} words — add about ${deficit} more words of relevant elaboration, examples, and concrete detail WITHIN the existing sentences and paragraphs). Do NOT add new sections or new topics. Do NOT change any facts. Preserve the exact register, voice, and style. Output ONLY the expanded text — no preamble, no commentary.
 
 TEXT:
-${lengthCapped}`;
+${current}`;
     const expanded = await callModel(expansionPrompt, { temperature: 0.70, topP: 0.90, maxOutputTokens: 4096 });
-    return enforceLengthDiscipline(expanded.trim() || lengthCapped, Math.round(inputWordCount * 1.05));
+    const trimmed = expanded.trim();
+    if (trimmed && trimmed.split(/\s+/).length > currentWords) {
+      current = trimmed;
+      currentWords = current.split(/\s+/).length;
+    } else {
+      // Expansion didn't help — stop trying, avoid wasting more calls.
+      break;
+    }
   }
 
-  return lengthCapped;
+  // Final length clamp: allow up to 112% (not the old 105%) so a slight
+  // over-expansion isn't brutally truncated back to a short output.
+  return enforceLengthDiscipline(current, Math.round(inputWordCount * (HARD_CEILING / inputWordCount)));
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
