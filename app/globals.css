@@ -20,6 +20,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Hide scrollbar utility (used on mobile horizontal scroll) */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 5px;
@@ -68,6 +77,16 @@ textarea:focus {
 /* Button press */
 button:active:not(:disabled) {
   transform: scale(0.975);
+}
+
+/* Prevent 300ms tap delay on iOS/Android */
+button, a, input[type="range"] {
+  touch-action: manipulation;
+}
+
+/* iOS safe-area inset for notched phones */
+footer {
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
 }
 
 /* Range slider — aurora teal thumb */

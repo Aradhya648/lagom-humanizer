@@ -242,7 +242,7 @@ export default function Home() {
             <span className="font-serif italic font-bold text-[1.5rem] text-text leading-none tracking-tight">
               lagom
             </span>
-            <span className="text-[0.95rem] font-sans font-light text-muted leading-none tracking-wide">
+            <span className="hidden sm:inline text-[0.95rem] font-sans font-light text-muted leading-none tracking-wide">
               Just the right amount of human
             </span>
           </div>
@@ -377,7 +377,7 @@ export default function Home() {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Paste your AI-generated text here..."
-                className="w-full h-full resize-none bg-transparent px-5 py-5 text-[15px] text-text placeholder:text-faint/50 leading-relaxed focus:outline-none"
+                className="w-full h-full resize-none bg-transparent px-5 py-5 text-[16px] text-text placeholder:text-faint/50 leading-relaxed focus:outline-none"
                 spellCheck={false}
               />
             </div>
@@ -515,14 +515,14 @@ export default function Home() {
 
       {/* ── Footer ── */}
       <footer className="border-t border-border py-5 mt-4">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-between">
-          <span className="text-[11px] tracking-widest uppercase font-medium text-accent/40 w-1/3">
+        <div className="max-w-6xl mx-auto px-5 sm:px-8 flex flex-col sm:flex-row items-center gap-2 sm:gap-0 sm:justify-between">
+          <span className="text-[11px] tracking-widest uppercase font-medium text-accent/40 sm:w-1/3 text-center sm:text-left order-2 sm:order-1">
             Lagom · Leverage AI Smartly
           </span>
-          <span className="w-1/3 text-center text-[11px] font-bold tracking-widest uppercase gradient-text" style={{ filter: "drop-shadow(0 0 6px rgba(0,212,170,0.3))" }}>
+          <span className="sm:w-1/3 text-center text-[11px] font-bold tracking-widest uppercase gradient-text order-1 sm:order-2" style={{ filter: "drop-shadow(0 0 6px rgba(0,212,170,0.3))" }}>
             By · Drufiy AI Pvt. Ltd.
           </span>
-          <span className="text-[11px] tracking-widest uppercase font-medium text-accent/40 w-1/3 text-right">
+          <span className="text-[11px] tracking-widest uppercase font-medium text-accent/40 sm:w-1/3 text-center sm:text-right order-3">
             Free to use
           </span>
         </div>
