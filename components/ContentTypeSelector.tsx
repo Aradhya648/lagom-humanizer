@@ -39,7 +39,7 @@ const CONTENT_TYPES: { id: ContentType; label: string; tooltip: string }[] = [
 
 export default function ContentTypeSelector({ value, onChange }: ContentTypeSelectorProps) {
   return (
-    <div className="overflow-x-auto scrollbar-none max-w-full">
+    <div className="overflow-x-auto scrollbar-none w-full">
     <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-surface-raised border border-border">
       {CONTENT_TYPES.map((ct) => (
         <div key={ct.id} className="relative group">

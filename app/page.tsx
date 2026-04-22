@@ -298,7 +298,7 @@ export default function Home() {
         <div className="bg-surface border border-border rounded-2xl shadow-panel px-3 sm:px-4 py-2.5 sm:py-3 mb-4 sm:mb-5">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3">
             {/* Content type */}
-            <div className="flex-shrink-0">
+            <div className="w-full sm:w-auto sm:flex-shrink-0 min-w-0 overflow-hidden">
               <ContentTypeSelector value={contentType} onChange={setContentType} />
             </div>
 
