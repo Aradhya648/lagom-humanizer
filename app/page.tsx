@@ -523,6 +523,113 @@ export default function Home() {
         </div>
       </main>
 
+      {/* ── Info Section ── */}
+      <section className="border-t border-border/50 mt-8">
+        <div className="max-w-4xl mx-auto px-5 sm:px-8 py-12 sm:py-16 space-y-14">
+
+          {/* Intro */}
+          <div className="space-y-3">
+            <p className="text-base text-muted leading-relaxed">
+              Start using Lagom and humanize your AI text, <span className="text-accent font-medium">absolutely free.</span>
+            </p>
+            <p className="text-base text-muted leading-relaxed">
+              Our <span className="text-text font-semibold">Deep Mode</span> bypasses all major AI detectors including Originality.ai, ZeroGPT, QuillBot, Turnitin, and more.
+            </p>
+          </div>
+
+          {/* What is Lagom */}
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-text mb-4">What is Lagom?</h2>
+            <p className="text-[15px] text-muted leading-relaxed mb-3">
+              Lagom is a free AI-powered text humanisation tool built by Drufiy AI Pvt. Ltd. You paste AI-generated text from ChatGPT, Gemini, Claude, or any other model, and Lagom rewrites it to read like natural human writing.
+            </p>
+            <p className="text-[15px] text-muted leading-relaxed">
+              "Lagom" is a Swedish word meaning <span className="text-text italic">"just the right amount"</span>. Not too robotic, not over-edited. That's exactly what we aim for: text that sounds genuinely human without losing your original meaning.
+            </p>
+          </div>
+
+          {/* How to Use */}
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-text mb-6">How to Use</h2>
+            <div className="space-y-5">
+              {[
+                { step: "01", title: "Paste your text", desc: "Copy your AI-generated content and paste it into the Input box on the left." },
+                { step: "02", title: "Choose a content type", desc: "Select the type that matches your writing: General, Essay, Academic, Email, or Document." },
+                { step: "03", title: "Set your word limit", desc: "Use the Words slider to control how much of your text gets processed (up to 1,000 words)." },
+                { step: "04", title: "Hit Humanize", desc: "Click the Humanize button and wait a few seconds. Your rewritten text appears on the right, ready to copy." },
+              ].map(({ step, title, desc }) => (
+                <div key={step} className="flex gap-5">
+                  <span className="text-[11px] font-bold text-accent/50 tracking-widest pt-0.5 w-6 shrink-0">{step}</span>
+                  <div>
+                    <p className="text-[15px] font-semibold text-text mb-1">{title}</p>
+                    <p className="text-[14px] text-muted leading-relaxed">{desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Modes */}
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-text mb-6">Fast Mode vs Deep Mode</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-surface border border-border rounded-2xl p-5">
+                <p className="text-sm font-bold text-accent mb-2 tracking-wide uppercase">Fast Mode</p>
+                <p className="text-[14px] text-muted leading-relaxed">The default mode. Rewrites your text in a multi-pass pipeline covering structural changes, word-level edits, and targeted mutation. Results in under 30 seconds for most texts. Best for everyday use.</p>
+              </div>
+              <div className="bg-surface border border-border rounded-2xl p-5">
+                <div className="flex items-center gap-2 mb-2">
+                  <p className="text-sm font-bold text-accent tracking-wide uppercase">Deep Mode</p>
+                  <span className="text-[10px] text-faint border border-border px-1.5 py-0.5 rounded-full">Advanced</span>
+                </div>
+                <p className="text-[14px] text-muted leading-relaxed">Runs your text through multiple AI detectors in real time, then iteratively rewrites until all scores drop to safe levels. Takes 60 to 120 seconds. Best for high-stakes submissions where bypassing detection matters.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Content Types */}
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-text mb-6">Content Types Explained</h2>
+            <div className="space-y-4">
+              {[
+                { label: "General", desc: "Maximum variation. No constraints on rhythm or register. Best for blog posts, social media, articles, and everyday writing. The most aggressive humanisation." },
+                { label: "Essay", desc: "Preserves complex clause structure and formal register. No contractions. Designed for academic essays where argument flow must be maintained." },
+                { label: "Academic", desc: "Calibrated for research papers and reports. Keeps technical vocabulary and formal connectors. Makes the writing sound like a knowledgeable human researcher." },
+                { label: "Email", desc: "Conversational rhythm with natural contractions and a direct tone. Reads like a real person writing to a colleague, not a machine." },
+                { label: "Document", desc: "Professional tone throughout. No contractions, precise vocabulary, clear structure. Ideal for business reports, proposals, and official documents." },
+              ].map(({ label, desc }) => (
+                <div key={label} className="flex gap-4 border-b border-border/40 pb-4 last:border-0 last:pb-0">
+                  <span className="text-[13px] font-bold text-accent w-20 shrink-0 pt-0.5">{label}</span>
+                  <p className="text-[14px] text-muted leading-relaxed">{desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Score pill explanation */}
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-text mb-4">What Do the Scores Mean?</h2>
+            <p className="text-[15px] text-muted leading-relaxed mb-4">
+              Lagom runs a built-in AI detection check on both your input and output text. The score (0–100) estimates how likely the text is to be flagged as AI-written:
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { range: "0–30", label: "Likely Human", color: "text-emerald-400", bg: "bg-emerald-950/40 border-emerald-800/40" },
+                { range: "31–60", label: "Mixed", color: "text-amber-400", bg: "bg-amber-950/40 border-amber-800/40" },
+                { range: "61–80", label: "Likely AI", color: "text-orange-400", bg: "bg-orange-950/40 border-orange-800/40" },
+                { range: "81–100", label: "Almost Certainly AI", color: "text-red-400", bg: "bg-red-950/40 border-red-800/40" },
+              ].map(({ range, label, color, bg }) => (
+                <div key={range} className={`rounded-xl border px-3 py-3 ${bg}`}>
+                  <p className={`text-sm font-bold ${color}`}>{range}</p>
+                  <p className="text-xs text-muted mt-1">{label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        </div>
+      </section>
+
       {/* ── Footer ── */}
       <footer className="border-t border-border py-5 mt-4">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 flex flex-col sm:flex-row items-center gap-2 sm:gap-0 sm:justify-between">
