@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
 import ScorePill from "@/components/ScorePill";
 import ContentTypeSelector, { ContentType } from "@/components/ContentTypeSelector";
 import WordReveal from "@/components/WordReveal";
@@ -534,6 +535,15 @@ export default function Home() {
           <span className="text-[11px] tracking-widest uppercase font-medium text-accent/40 sm:w-1/3 text-center sm:text-right order-3">
             Free to use
           </span>
+        </div>
+        <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-center gap-5 mt-3 pt-3 border-t border-border/40">
+          <Link href="/terms" className="text-[11px] text-faint/60 hover:text-accent transition-colors tracking-wide">
+            Terms &amp; Conditions
+          </Link>
+          <span className="text-faint/30 text-[11px]">·</span>
+          <a href="mailto:drufiyai001@gmail.com" className="text-[11px] text-faint/60 hover:text-accent transition-colors tracking-wide">
+            Contact Us
+          </a>
         </div>
       </footer>
     </div>
