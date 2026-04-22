@@ -243,49 +243,74 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
     console.log("[gptzero] clicked submit, waiting for result...");
     await page.waitForTimeout(WAIT_FOR_RESULT);
 
-    const score = await page.evaluate(() => {
+    const scoreData = await page.evaluate(() => {
+      const marketingMarkers = [
+        "99% accuracy",
+        "17 million",
+        "1 million",
+        "gptzero is the most accurate",
+        "preserve what's human",
+        "scan for potential ai text",
+        "ai detector made to",
+      ];
+
+      const isMarketingText = (t: string) => {
+        const lower = t.toLowerCase();
+        return marketingMarkers.some((m) => lower.includes(m));
+      };
+
+      const isResultText = (t: string) => {
+        const lower = t.toLowerCase();
+        return /(?:\bai\b|\bhuman\b|\bprobability\b|\bscore\b|\bresult\b|\bdetected\b|\blikelihood\b)/i.test(t) &&
+          !isMarketingText(lower);
+      };
+
       const allEls = Array.from(document.querySelectorAll("*"));
 
       // Strategy 1: "AI 73%" format — new GPTZero app UI (label comes BEFORE number)
       for (const el of allEls) {
         if (el.children.length > 3) continue;
         const t = el.textContent?.trim() ?? "";
+        if (!isResultText(t)) continue;
         const labelFirst = t.match(/\bAI\s+(\d{1,3})\s*%/i);
-        if (labelFirst) { const n = parseInt(labelFirst[1], 10); if (n >= 0 && n <= 100) return n; }
+        if (labelFirst) { const n = parseInt(labelFirst[1], 10); if (n >= 0 && n <= 100) return { score: n, source: "ai-first", text: t }; }
       }
 
       // Strategy 2: "73% AI" format — old UI
       for (const el of allEls) {
         if (el.children.length > 3) continue;
         const t = el.textContent?.trim() ?? "";
+        if (!isResultText(t)) continue;
         const labelAfter = t.match(/(\d{1,3})\s*%\s*(?:AI|ai)\b/);
-        if (labelAfter) { const n = parseInt(labelAfter[1], 10); if (n >= 0 && n <= 100) return n; }
+        if (labelAfter) { const n = parseInt(labelAfter[1], 10); if (n >= 0 && n <= 100) return { score: n, source: "ai-after", text: t }; }
       }
 
       // Strategy 3: bare percentage in a leaf element
       for (const el of allEls) {
         if (el.children.length > 2) continue;
         const t = el.textContent?.trim() ?? "";
-        if (/^\d{1,3}%$/.test(t)) { const n = parseInt(t, 10); if (n >= 0 && n <= 100) return n; }
+        if (!isResultText(t) || isMarketingText(t)) continue;
+        if (/^\d{1,3}%$/.test(t)) { const n = parseInt(t, 10); if (n >= 0 && n <= 100) return { score: n, source: "bare", text: t }; }
       }
 
       // Strategy 4: data attributes
       for (const el of allEls) {
         const v = el.getAttribute("data-score") ?? el.getAttribute("data-ai-score") ?? el.getAttribute("data-ai");
-        if (v !== null) { const n = parseFloat(v); if (!isNaN(n)) return Math.round(n <= 1 ? n * 100 : n); }
+        if (v !== null) { const n = parseFloat(v); if (!isNaN(n)) return { score: Math.round(n <= 1 ? n * 100 : n), source: "data", text: el.textContent?.trim() ?? "" }; }
       }
 
       // Strategy 5: infer from Human% — "Human 27%" → AI = 73%
       for (const el of allEls) {
         if (el.children.length > 3) continue;
         const t = el.textContent?.trim() ?? "";
+        if (!isResultText(t)) continue;
         const humanFirst = t.match(/\bHuman\s+(\d{1,3})\s*%/i);
-        if (humanFirst) { const n = parseInt(humanFirst[1], 10); if (n >= 0 && n <= 100) return 100 - n; }
+        if (humanFirst) { const n = parseInt(humanFirst[1], 10); if (n >= 0 && n <= 100) return { score: 100 - n, source: "human-first", text: t }; }
         const humanAfter = t.match(/(\d{1,3})\s*%\s*Human\b/i);
-        if (humanAfter) { const n = parseInt(humanAfter[1], 10); if (n >= 0 && n <= 100) return 100 - n; }
+        if (humanAfter) { const n = parseInt(humanAfter[1], 10); if (n >= 0 && n <= 100) return { score: 100 - n, source: "human-after", text: t }; }
       }
 
-      return -1;
+      return null;
     });
 
     // Extract flagged sentences — GPTZero highlights AI sentences with specific classes
@@ -315,8 +340,17 @@ async function scrapeGPTZeroPage(page: Page, text: string): Promise<DetectorScor
       return Array.from(new Set(results)).slice(0, 15);
     });
 
+    const score = scoreData?.score ?? -1;
+    const source = scoreData?.source ?? "none";
+    const scoreText = scoreData?.text ?? "";
     const cleanFlagged = sanitizeFlaggedSentences(flaggedSentences, text);
-    console.log("[gptzero] score:", score, "flagged-raw:", flaggedSentences.length, "flagged-clean:", cleanFlagged.length);
+    const suspiciousMarketingScore = source === "bare" && score >= 90 && scoreText.toLowerCase().includes("accuracy") && cleanFlagged.length === 0;
+    const suspiciousEmptyHighScore = score >= 90 && cleanFlagged.length === 0;
+    if (suspiciousMarketingScore || suspiciousEmptyHighScore) {
+      console.log("[gptzero] rejecting suspicious score:", score, "source:", source, scoreText.slice(0, 120));
+      return fail("GPTZero: suspicious marketing score");
+    }
+    console.log("[gptzero] score:", score, "source:", source, "flagged-raw:", flaggedSentences.length, "flagged-clean:", cleanFlagged.length);
 
     return score === -1
       ? fail("GPTZero: could not parse score")

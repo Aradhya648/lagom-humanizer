@@ -667,6 +667,10 @@ export default function Home() {
 
 function mapErrorMessage(technical: string): string {
   const t = technical.toLowerCase();
+  if (t.includes("deployment_not_found"))
+    return "Frontend deployment missing. Refresh in a moment or use the latest live URL.";
+  if (t.includes("authentication required") || t.includes("vercel authentication"))
+    return "This deployment is protected right now. Open the public production URL instead.";
   if (t.includes("load failed") || t.includes("failed to fetch") || t.includes("networkerror"))
     return "Server overloaded — please try again later";
   if (t.includes("deep humanize failed") || t.includes("http 5"))

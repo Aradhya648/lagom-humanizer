@@ -174,6 +174,7 @@ const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90, maxOutp
 const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutputTokens: 4096 };
 const GEMINI_TIMEOUT_MS = 30_000;
 const SHORT_FAST_PATH_WORDS = 120;
+const MID_FAST_PATH_WORDS = 450;
 const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 4096 };
 const FAST_MODEL = "gemini-2.5-flash";
 
@@ -1036,6 +1037,18 @@ export async function humanize(
   if (inputWordCount <= SHORT_FAST_PATH_WORDS) {
     const singlePass = await singlePassHumanize(truncated, contentType);
     return finishHumanizedText(singlePass, register, inputWordCount);
+  }
+
+  // Mid-length texts should stay comfortably under Vercel's runtime budget.
+  // A full chunk-by-chunk pipeline on ~400 words can exceed 60s, so use a
+  // whole-text rewrite first and only pay for mutation if the score is still high.
+  if (inputWordCount <= MID_FAST_PATH_WORDS) {
+    const singlePass = await singlePassHumanize(truncated, contentType);
+    const { score } = detectAI(singlePass);
+    const maybeMutated = score > 35
+      ? await mutationPass(singlePass, contentType)
+      : singlePass;
+    return finishHumanizedText(maybeMutated, register, inputWordCount);
   }
 
   const chunks = splitIntoVariableChunks(truncated);
