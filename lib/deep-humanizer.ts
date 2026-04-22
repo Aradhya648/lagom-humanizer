@@ -536,7 +536,7 @@ export async function humanizeDeep(
       // Each pivot produces a different statistical signature, giving us
       // multiple "shots" at evasion. iter 2→French, iter 3→German,
       // iter 4→Portuguese, iter 5→Italian.
-      const pivotRotation: PivotLanguage[] = ["French", "German", "Portuguese", "Italian"];
+      const pivotRotation: PivotLanguage[] = ["Arabic", "Japanese", "Korean", "Spanish"];
       if (iter >= 2 && iter <= 5 && avg > 10) {
         const pivot = pivotRotation[iter - 2];
         onEvent({

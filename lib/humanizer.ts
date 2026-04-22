@@ -1050,10 +1050,14 @@ ${current}`;
 // Different sentence structures, different collocations, different rhythm —
 // all native to human translation, foreign to AI detection models.
 
-export type PivotLanguage = "Spanish" | "French" | "German" | "Portuguese" | "Italian";
+export type PivotLanguage = "Chinese" | "Arabic" | "Japanese" | "Korean" | "Spanish" | "French" | "German";
 
-const TRANSLATION_TEMP = 0.3;
-const BACK_TRANSLATION_TEMP = 0.4;
+// Chinese/Arabic/Japanese/Korean have fundamentally different syntax from English
+// (no articles, different word order, different tense/aspect handling).
+// Back-translating from these forces genuinely restructured English rather than
+// the near-identical paraphrase you get from European pivots.
+const TRANSLATION_TEMP = 0.4;
+const BACK_TRANSLATION_TEMP = 0.7;
 
 interface PlaceholderMap {
   [key: string]: string;
@@ -1130,19 +1134,21 @@ ${pivot.toUpperCase()} TRANSLATION:`;
 async function translateFromPivot(text: string, pivot: PivotLanguage, register: SourceRegister): Promise<string> {
   const registerInstruction = getRegisterInstruction(register);
 
-  const prompt = `Translate the following ${pivot} text to natural, fluent English.
+  const prompt = `Translate the following ${pivot} text into natural, fluent, grammatically correct English.
 
 TONE/REGISTER:
 ${registerInstruction}
 
 CRITICAL RULES:
-- Preserve the exact meaning and ALL facts (numbers, names, dates, technical terms)
-- Use PLAIN everyday English vocabulary — do NOT reach for ornate or academic-sounding synonyms
-- Avoid: "utilize", "leverage", "facilitate", "multifaceted", "pervasive", "permeate", "paramount", "profound", "myriad", "plethora", "furthermore", "moreover"
+- Output MUST be 100% grammatically correct English — fix any awkward phrasing or word-order artifacts from the source language
+- Vary sentence structure: some short (under 12 words), some long (over 22 words), avoid uniformity
+- Use PLAIN everyday vocabulary — the simplest word that fits is always correct
+- Do NOT use: "utilize", "leverage", "facilitate", "multifaceted", "pervasive", "paramount", "profound", "myriad", "plethora", "furthermore", "moreover", "additionally", "it is worth noting"
+- Active voice preferred over passive where natural
 - Keep any placeholder tokens (strings starting and ending with ZZ) UNCHANGED
 - Preserve paragraph breaks exactly
 - Do not add parenthetical asides, em-dash asides, or editorial comments
-- Keep sentence structure natural — do not paraphrase just to vary
+- Preserve ALL facts, numbers, names, dates, and technical terms exactly
 - Output ONLY the English translation. No preamble, no commentary.
 
 ${pivot.toUpperCase()} TEXT:
@@ -1206,7 +1212,7 @@ function plainVocabScrubber(text: string): string {
 export async function roundTripHumanize(
   text: string,
   register: SourceRegister,
-  pivot: PivotLanguage = "Spanish"
+  pivot: PivotLanguage = "Chinese"
 ): Promise<string> {
   const { stripped, map } = extractPlaceholders(text);
 
@@ -1245,7 +1251,7 @@ export async function humanize(
   // magic happens — translated-back English has a statistical signature
   // that ZeroGPT/QuillBot's classifiers don't recognize as AI.
   try {
-    const roundTripped = await roundTripHumanize(truncated, register, "Spanish");
+    const roundTripped = await roundTripHumanize(truncated, register, "Chinese");
     // Sanity check: if round-trip produced far less text than input,
     // it likely truncated during translation — fall back to single-pass.
     const outWords = roundTripped.trim().split(/\s+/).length;
