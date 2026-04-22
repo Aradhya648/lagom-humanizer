@@ -537,13 +537,13 @@ export default function Home() {
           </span>
         </div>
         <div className="max-w-6xl mx-auto px-5 sm:px-8 flex items-center justify-center gap-5 mt-3 pt-3 border-t border-border/40">
-          <Link href="/terms" className="text-[11px] text-faint/60 hover:text-accent transition-colors tracking-wide">
+          <Link href="/terms" className="text-[11px] font-bold text-faint/60 hover:text-accent transition-colors tracking-wide">
             Terms &amp; Conditions
           </Link>
           <span className="text-faint/30 text-[11px]">·</span>
-          <a href="mailto:drufiyai001@gmail.com" className="text-[11px] text-faint/60 hover:text-accent transition-colors tracking-wide">
-            Contact Us
-          </a>
+          <span className="text-[11px] font-bold text-faint/60 tracking-wide">
+            © 2026 Drufiy AI Pvt. Ltd.
+          </span>
         </div>
       </footer>
     </div>
