@@ -169,12 +169,14 @@ interface GenSettings {
   maxOutputTokens?: number;
 }
 
-const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.85, topP: 0.95, maxOutputTokens: 4096 };
-const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.75, topP: 0.90, maxOutputTokens: 4096 };
-const MUTATION_SETTINGS: GenSettings  = { temperature: 0.88, topP: 0.92, maxOutputTokens: 4096 };
+// Lowered temperatures: high temps were making Gemini produce ornate,
+// verbose "creative" output. Lower = more deterministic, plainer language.
+const STRUCTURAL_SETTINGS: GenSettings = { temperature: 0.60, topP: 0.90, maxOutputTokens: 4096 };
+const SEMANTIC_SETTINGS: GenSettings  = { temperature: 0.55, topP: 0.88, maxOutputTokens: 4096 };
+const MUTATION_SETTINGS: GenSettings  = { temperature: 0.60, topP: 0.88, maxOutputTokens: 4096 };
 const GEMINI_TIMEOUT_MS = 30_000;
 const SHORT_FAST_PATH_WORDS = 120;
-const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.78, topP: 0.90, maxOutputTokens: 4096 };
+const SINGLE_PASS_SETTINGS: GenSettings = { temperature: 0.60, topP: 0.88, maxOutputTokens: 4096 };
 const FAST_MODEL = "gemini-2.5-flash";
 
 // Flash is materially faster here and the quality delta is negligible in fast mode.
@@ -238,25 +240,28 @@ function validateChunkOutput(output: string, fallback: string): string {
 function getFastSinglePassPrompt(text: string, contentType: ContentType): string {
   const isFormal = contentType === "essay" || contentType === "academic";
   const registerNote = isFormal
-    ? "REGISTER: Formal academic. No contractions. Plain academic vocabulary only — no ornate synonyms."
-    : "REGISTER: Natural educated voice. Contractions welcome. Plain everyday vocabulary.";
+    ? "Formal academic voice. No contractions. Plain academic vocabulary."
+    : "Natural human voice. Plain everyday vocabulary. Contractions OK.";
 
-  return `Rewrite this text to defeat AI detectors (ZeroGPT, QuillBot, GPTZero).
+  return `Rewrite this text so it reads like a real human wrote it.
+Use plain, common words. Preserve the meaning exactly.
 
 ${registerNote}
 
-WHAT AI DETECTORS CATCH — fix ALL of these:
-1. PREDICTABLE WORD CHOICES — every word flows too smoothly from the last. Use unexpected but accurate word choices. Avoid ornate vocabulary (utilize→use, leverage→use, moreover→also, furthermore→also).
-2. UNIFORM SENTENCE LENGTHS — all sentences near the same word count. Force extremes: one sentence under 8 words, one over 28 words per paragraph.
-3. SIGNPOST PHRASES — remove: "furthermore", "moreover", "in conclusion", "it is important to note", "it is worth mentioning", "in today's world".
-4. ABSTRACT CLAIMS — replace at least one abstract claim with a concrete specific detail.
-5. REPEATED SENTENCE OPENERS — no two consecutive sentences start with the same word.
-6. MISSING HUMAN VOICE — add one natural aside: "honestly", "in practice", "at least in theory", "as a rule", or "worth noting".
+Do:
+- Remove ornate vocabulary (utilize→use, leverage→use, facilitate→help,
+  multifaceted→complex, pervasive→common, permeate→reach)
+- Remove signpost phrases ("furthermore", "moreover", "in conclusion",
+  "it is important to note")
+- Change a repeated sentence opener if two in a row start the same
 
-HARD RULES:
-- Preserve ALL facts and meaning exactly
-- Output ONLY the rewritten text — no preamble
-- Keep result near original length (±10%)
+Do NOT:
+- Add parenthetical asides or em-dash asides
+- Add "honestly", "frankly", "in practice" or similar opinion markers
+- Expand the text — keep it 90-105% of input length
+- Replace a plain word with a fancier synonym
+
+Output only the rewritten text. No preamble.
 
 TEXT:
 ${text}`;
@@ -989,15 +994,18 @@ async function finishHumanizedText(
   register: SourceRegister,
   inputWordCount: number
 ): Promise<string> {
+  // STRIPPED-BACK pipeline: every "injector" we added (parentheticals,
+  // bridges, em-dash asides, perplexity hedges, synonym swaps) was adding
+  // MORE AI-flavored noise, not less. Gemini's own "human-sounding" output
+  // is already AI-typical; layering injectors on top compounds the problem.
+  //
+  // Kept: basic cleanup + n-gram breaking + opener diversity + grammar dedup.
+  // Removed: structuralPerplexityInjector, perplexityInjector,
+  //          interParagraphDivergencePass, burstinessInjector, emDashInjector.
   const cleaned = antiPatternPass(text, register);
   const suppressed = rhetoricalSuppressionPass(cleaned);
   const ngramBroken = zeroGPTNgramBreaker(suppressed);
-  const structPerplexed = structuralPerplexityInjector(ngramBroken, register);
-  const perplexed = perplexityInjector(structPerplexed, register);
-  const diverged = interParagraphDivergencePass(perplexed);
-  const bursty = burstinessInjector(diverged, register);
-  const emdashed = emDashInjector(bursty, register);
-  const opened = openerDiversityPass(emdashed);
+  const opened = openerDiversityPass(ngramBroken);
   const grammarClean = grammarAndDedupPass(opened);
   const lengthCapped = enforceLengthDiscipline(grammarClean, inputWordCount);
 

@@ -84,40 +84,27 @@ Merge short choppy ones. No two consecutive sentences can
 have word counts within 3 of each other. Contractions welcome.`,
   };
 
-  return `You are rewriting text to break AI detection patterns.
-Your ONLY job is changing sentence structure and rhythm.
-PRESERVE the existing vocabulary — do not reach for synonyms.
+  return `Rewrite this text so it reads like a thoughtful human wrote it.
+Use plain common vocabulary. Preserve the meaning and facts exactly.
 
 ${contentBehavior[contentType]}
 
-SECTION FOCUS: ${hint}
-
 ${BANNED_LLM_VOCAB}
 
-MANDATORY STRUCTURAL CHANGES — you MUST do ALL of these:
-1. Every paragraph MUST contain at least one sentence under
-   9 words AND at least one sentence over 28 words.
-2. The gap between the shortest and longest sentence in each
-   paragraph must be at least 18 words.
-3. Split the longest uniform sentence into two at a comma or
-   natural clause boundary.
-4. Change the opening word of at least 3 sentences so no
-   two consecutive sentences start with the same word.
-5. Convert at least one compound sentence joined by "and"
-   into two separate sentences, or vice versa.
-6. Add a parenthetical aside (set off by commas or em-dashes)
-   to at least one sentence per paragraph.
+LIGHT TOUCH — do these ONLY if they fit naturally:
+- Vary sentence length a little (some short, some long)
+- Change a repeated opener if two sentences in a row start the same
+- Remove filler phrases ("in conclusion", "furthermore", "it is important to note")
 
-FORBIDDEN:
-- Two consecutive sentences with word counts within 4 of each other
-- Three sentences starting with the same word
-- All sentences in a paragraph having lengths within 10 words of each other
-- Keeping paragraph structure identical to input
-- Replacing a plain word with a fancier synonym
+DO NOT:
+- Add parenthetical asides, em-dash asides, or hedging "(though X)" inserts
+- Replace plain words with fancier synonyms
+- Add "honestly", "frankly", "admittedly", "in practice" unless they were in the original
+- Make sentences longer or more ornate
+- Break meaning
 
-DO NOT change vocabulary or meaning. Keep the SAME words.
 Output only the rewritten text. No preamble.
-STRICT LENGTH: 90-110% of input word count.
+STRICT LENGTH: 90-105% of input word count (do NOT expand).
 Preserve paragraph breaks.
 
 TEXT:
@@ -162,19 +149,16 @@ Plain everyday words only.`,
 vocabulary. Replace vague phrases with specific grounded language.`,
 
     general: `Natural educated voice with PLAIN vocabulary.
-You MUST make these changes:
-1. Replace stiff or ornate words with plain equivalents.
+Do these ONLY where they fit naturally:
+1. Replace stiff or ornate words with plain equivalents:
    "utilize" → "use", "individuals" → "people", "subsequently" → "then",
-   "endeavor" → "try", "commence" → "start", "ascertain" → "find out",
-   "facilitate" → "help", "demonstrate" → "show".
-2. Add TWO contractions somewhere natural (it's, that's, don't, they're).
-3. Replace one abstract claim with a more concrete/specific version.
-4. If any sentence starts with "The" or "This", change at least
-   one of them to start differently.
-5. Make one sentence noticeably more direct — remove hedging
-   like "tend to", "often appear to", "seems to".
-6. Inject ONE mild opinion-marker where natural ("honestly",
-   "in practice", "admittedly", "as a rule").`,
+   "endeavor" → "try", "commence" → "start", "facilitate" → "help"
+2. Use contractions where they sound natural (it's, that's, don't)
+3. Remove vague hedging like "tend to", "seems to", "often appear to"
+
+DO NOT add "honestly", "frankly", "admittedly", "in practice" or similar
+opinion markers. DO NOT add parentheticals or em-dash asides. DO NOT
+expand the text — keep it near the original length.`,
   };
 
   return `You are a human editor fixing word choices and voice only.
@@ -232,60 +216,42 @@ REGISTER LOCK: Formal academic text.
 No contractions. No slang. BUT plain vocabulary is required.
 ` : "";
 
-  return `Final surgical pass. Fix ONLY these patterns if present.
-Do not touch anything already reading naturally.
-CRITICAL: if a word is already plain and common, DO NOT replace it
-with a fancier synonym. Humans use the plain word; AI reaches for synonyms.
+  return `Final cleanup pass. ONLY fix these specific patterns if they appear.
+Do not touch anything that already reads naturally.
+CRITICAL: if a word is already plain and common, LEAVE IT. Humans use
+plain words. AI reaches for synonyms. Do not paraphrase for its own sake.
 ${registerLock}
 
 ${BANNED_LLM_VOCAB}
 
-FIX THESE IF PRESENT:
+FIX ONLY IF PRESENT:
 
-1. ORNATE VOCABULARY (highest priority — AI paraphrasing signal)
-   Scan the text for any word in the banned list above.
-   Replace each with the plain equivalent.
-   Examples: "interrogate data" → "examine data";
-   "curtails the burden" → "cuts the burden";
-   "pervasive authority" → "strong influence";
-   "discernible" → "clear"; "paramount" → "key";
-   "multifaceted" → "complex".
+1. ORNATE VOCABULARY (highest priority)
+   Replace any banned word with its plain equivalent:
+   "interrogate" → "examine"; "utilize" → "use";
+   "multifaceted" → "complex"; "paramount" → "key";
+   "pervasive" → "common"; "discernible" → "clear";
+   "permeate" → "reach into"; "facilitate" → "help".
 
-2. UNIFORM SENTENCE LENGTHS (GPTZero signal)
-   Find any paragraph where all sentences are within 8 words
-   of each other. Force extreme variance: cut one sentence to
-   under 8 words AND extend another to over 28.
+2. REPEATED OPENERS
+   If two consecutive sentences start with the same word, change one.
 
-3. REPEATED OPENERS
-   Find two consecutive sentences starting with the same word.
-   Change the opener of the second one.
+3. OVERUSED CONNECTORS
+   "however", "therefore", "moreover", "furthermore" more than once
+   per paragraph — remove extras.
 
-4. OVERUSED CONNECTORS
-   "however", "therefore", "moreover", "furthermore" appearing
-   more than once in a paragraph. Remove the extra occurrence.
-
-5. PREDICTABLE SENTENCE ENDINGS (GPTZero signal)
-   Sentences ending with tidy wrap-up clauses like
-   "...which ultimately leads to better outcomes" or
-   "...making it essential for success." Cut these trailing clauses.
-
-6. ZOMBIE NOUNS
-   Convert one nominalization back to a verb:
+4. ZOMBIE NOUNS
+   Convert nominalizations back to verbs where natural:
    "make a decision" → "decide"
-   "have an understanding" → "understand"
    "provide assistance" → "help"
-   "perform an analysis" → "analyze"
 
-7. ADD ONE EM-DASH ASIDE
-   In one sentence of 18+ words, insert an em-dash aside:
-   "The system works—mostly, anyway—as expected."
-
-8. SMOOTH TRANSITIONS (GPTZero signal)
-   If all paragraphs flow perfectly into each other, make one
-   transition slightly more abrupt or add a brief pivot phrase.
+DO NOT:
+- Add em-dash asides, parentheticals, or hedging inserts
+- Add "honestly", "frankly", "in practice" or similar markers
+- Expand the text — stay at 90-105% of input length
+- Make sentences more elaborate or flowery
 
 Output only the fixed text. No preamble.
-STRICT LENGTH: 90-110% of input word count.
 Preserve paragraph breaks.
 
 TEXT:

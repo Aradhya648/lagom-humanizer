@@ -12,8 +12,6 @@ import {
   antiPatternPass,
   rhetoricalSuppressionPass,
   zeroGPTNgramBreaker,
-  perplexityInjector,
-  burstinessInjector,
   openerDiversityPass,
   type SourceRegister,
 } from "@/lib/humanizer";
@@ -183,29 +181,19 @@ function worstDetector(scores: AllScores): string {
 // ─── Detector-specific sentence rewrite prompts ──────────────────────────────
 
 const DETECTOR_STRATEGIES: Record<string, string> = {
-  GPTZero: `GPTZero's 4.4b model flagged this as "Possible AI Paraphrasing".
-FIX: Scrub ornate vocabulary. Add an em-dash aside or parenthetical.
-Vary sentence length — make it noticeably shorter OR longer than neighbors.
-Change the opening word.`,
+  GPTZero: `Rewrite this sentence in plainer, more direct language.
+Use simpler words. Remove ornate vocabulary. Do not add asides or parentheticals.`,
 
-  ZeroGPT: `ZeroGPT scores text on PERPLEXITY (how predictable each word is) and BURSTINESS (sentence length variation). This sentence is too predictable — every word flows too smoothly from the last.
-FIX (choose two or more):
-- Start mid-thought without a setup clause (drop "It is clear that", "One of the most", etc.)
-- Use an unexpected but accurate word choice — not a synonym, a genuinely surprising fit
-- Add a short concrete detail or comparison that breaks the abstract flow
-- Split into one very short sentence (under 7 words) + one long one (over 25 words), OR merge two short sentences with an em-dash or semicolon
-- Use active voice with a specific subject instead of "it/this/there"
-- Add a mild human aside: "honestly", "in practice", "as a rule", "at least in most cases"`,
+  ZeroGPT: `Rewrite this sentence in plainer, simpler language.
+Use common everyday words. Remove ornate or formal-sounding vocabulary.
+Do not add parentheticals, em-dash asides, or opinion markers.`,
 
-  QuillBot: `QuillBot flagged this as AI-refined text.
-FIX: Break the claim-support-conclusion pattern.
-Use a different clause structure (relative clause, participial phrase, or fragment).
-Inject a specific detail or observation.`,
+  QuillBot: `Rewrite this sentence with simpler vocabulary and a slightly different structure.
+Replace any ornate words with plain ones. Keep it short and clear.
+Do not add parentheticals or asides.`,
 
-  Originality: `Originality.ai's deep model flagged this as AI.
-FIX: Restructure completely. Change voice (passive↔active).
-Replace abstract claims with concrete specifics.
-Add a human voice marker (honestly, in practice, as a rule).`,
+  Originality: `Rewrite this sentence in plainer, more direct language.
+Use simpler words. Remove any ornate vocabulary. Do not add asides.`,
 };
 
 // ─── Fuzzy sentence matching + splicing ──────────────────────────────────────
@@ -369,10 +357,8 @@ function buildFullTextRemutationPrompt(
     ? "REGISTER: Formal/academic. No contractions. No slang."
     : "REGISTER: Natural educated voice. Contractions welcome.";
 
-  return `You are rewriting text to defeat AI detectors. Current scores:
+  return `Rewrite this text in plainer, more human language. Current detector scores:
 ${scoreLines}
-
-WORST DETECTOR: ${worst} — fix this first.
 
 ${strategy}
 
@@ -380,13 +366,16 @@ ${BANNED_VOCAB_PROMPT}
 
 ${registerNote}
 
-STRUCTURAL CHANGES — do ALL of these:
-- Every paragraph MUST contain one sentence under 9 words AND one over 28 words
-- Gap between shortest and longest sentence ≥ 18 words per paragraph
-- No two consecutive sentences can start with the same word
-- Break at least one compound sentence into two; merge at least two short ones
-- Add one parenthetical aside (commas or em-dashes) per paragraph
-- Replace any abstract claim with a concrete specific where natural
+WHAT TO DO:
+- Replace ornate vocabulary with plain everyday words
+- Remove signpost phrases ("furthermore", "moreover", "in conclusion")
+- If two consecutive sentences start with the same word, change one
+
+DO NOT:
+- Add parenthetical asides or em-dash asides
+- Add "honestly", "frankly", "in practice" or similar markers
+- Make sentences longer or more elaborate
+- Paraphrase for its own sake — leave already-plain wording alone
 
 WORD COUNT — CRITICAL:
 Current text: ${currentWordCount} words.
@@ -409,11 +398,12 @@ function applyDeterministicPasses(text: string, register: SourceRegister): strin
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
+  // STRIPPED-BACK: removed perplexityInjector + burstinessInjector.
+  // They were adding "(though certainly to varying degrees)" and
+  // "That part matters." bridges that themselves read as AI-generated.
   result = antiPatternPass(result, register);
   result = rhetoricalSuppressionPass(result);
   result = zeroGPTNgramBreaker(result);
-  result = perplexityInjector(result, register);
-  result = burstinessInjector(result, register);
   result = openerDiversityPass(result);
   return result;
 }
