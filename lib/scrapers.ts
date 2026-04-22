@@ -663,10 +663,12 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
 
 // ─── Coordinator ─────────────────────────────────────────────────────────────
 
-// Per-scraper hard ceiling — no individual detector can block the round longer than this
-const SCRAPER_HARD_TIMEOUT_MS = 60_000;
-// Whole-round hard ceiling — even if all 4 hang, this guarantees the round ends
-const SCORE_ALL_HARD_TIMEOUT_MS = 90_000;
+// Per-scraper hard ceiling — no individual detector can block the round longer than this.
+// 45s is enough: goto (≤10s) + form fill (~1s) + wait_for_result (~8s) + parse (~1s) + slack.
+const SCRAPER_HARD_TIMEOUT_MS = 45_000;
+// Whole-round hard ceiling. Now that QuillBot is a no-op stub, we only run
+// 3 scrapers in parallel — tighter cap is safe and keeps iterations fast.
+const SCORE_ALL_HARD_TIMEOUT_MS = 70_000;
 
 function withScraperTimeout(
   name: string,

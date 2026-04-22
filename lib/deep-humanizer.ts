@@ -431,13 +431,17 @@ export async function humanizeDeep(
   inputText: string,
   contentType: ContentType,
   wordLimit: number,
-  options: { threshold?: number; maxIterations?: number } = {},
+  options: { threshold?: number; maxIterations?: number; abortSignal?: AbortSignal } = {},
   onEvent: EventEmitter = () => {}
 ): Promise<DeepHumanizeResult> {
   const releaseSession = await acquireDeepSession(onEvent);
 
   try {
-    const { threshold = 5, maxIterations = 6 } = options;
+    // maxIterations: 3 is the sweet spot. Empirically, most score improvement
+    // lands in rounds 1-2; rounds 4+ see diminishing returns AND blow past
+    // the route's 5-min hard timeout on longer inputs (800+ words → each
+    // round is ~90-120s between Playwright scoring + Gemini rewrites).
+    const { threshold = 5, maxIterations = 3, abortSignal } = options;
     const register = classifyRegister(inputText);
     const originalWordCount = inputText.trim().split(/\s+/).length;
     const targetWordCount = Math.min(originalWordCount, wordLimit);
@@ -453,6 +457,13 @@ export async function humanizeDeep(
     };
 
     for (let iter = 0; iter < maxIterations; iter++) {
+      // Soft-abort: route handler signals us ~30s before the hard timeout
+      // so we can stop cleanly and emit the best-so-far result.
+      if (abortSignal?.aborted) {
+        onEvent({ type: "status", message: `Stopping early to return best result so far...` });
+        break;
+      }
+
       onEvent({
         type: "status",
         message: `Round ${iter + 1}/${maxIterations}: scoring against all 4 detectors...`,
