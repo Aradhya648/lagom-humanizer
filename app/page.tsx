@@ -246,9 +246,12 @@ export default function Home() {
               Just the right amount of human
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-faint">
+          <div className="flex items-center gap-2 text-xs">
             <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse-opacity" />
-            <span>Live</span>
+            <span className="text-faint">Live</span>
+            <span className="font-bold tracking-wider text-accent" style={{ textShadow: "0 0 10px rgba(0,212,170,0.7), 0 0 20px rgba(0,212,170,0.3)" }}>
+              BetaV-0.1
+            </span>
           </div>
         </div>
       </header>
