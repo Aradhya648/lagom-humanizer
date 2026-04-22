@@ -281,22 +281,22 @@ export default function Home() {
           ))}
         </div>
         {/* Hero text */}
-        <div className="relative z-10 max-w-6xl mx-auto px-5 sm:px-8 py-10 sm:py-16 text-center">
-          <h1 className="font-serif italic gradient-text text-[2rem] sm:text-[3rem] leading-tight mb-3 tracking-tight">
+        <div className="relative z-10 max-w-6xl mx-auto px-5 sm:px-8 py-6 sm:py-12 lg:py-16 text-center">
+          <h1 className="font-serif italic gradient-text text-[1.75rem] sm:text-[2.5rem] lg:text-[3rem] leading-tight mb-2 sm:mb-3 tracking-tight">
             Humanize Your AI Text
           </h1>
-          <p className="text-lg text-muted font-light max-w-md mx-auto leading-relaxed">
+          <p className="text-base sm:text-lg text-muted font-light max-w-md mx-auto leading-relaxed">
             Bypass AI detection and sound human every time
           </p>
         </div>
       </section>
 
       {/* ── Main ── */}
-      <main className="flex-1 max-w-6xl mx-auto w-full px-5 sm:px-8 py-6">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-8 py-4 sm:py-6">
 
         {/* Controls Bar */}
-        <div className="bg-surface border border-border rounded-2xl shadow-panel px-4 py-3 mb-5">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <div className="bg-surface border border-border rounded-2xl shadow-panel px-3 sm:px-4 py-2.5 sm:py-3 mb-4 sm:mb-5">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3">
             {/* Content type */}
             <div className="flex-shrink-0">
               <ContentTypeSelector value={contentType} onChange={setContentType} />
@@ -368,7 +368,7 @@ export default function Home() {
         )}
 
         {/* Two-panel layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
 
           {/* Input Panel */}
           <div className="flex flex-col gap-2">
@@ -382,7 +382,7 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="bg-surface border border-border rounded-2xl shadow-panel overflow-hidden h-80 lg:h-[460px]">
+            <div className="bg-surface border border-border rounded-2xl shadow-panel overflow-hidden h-52 sm:h-72 lg:h-[460px]">
               <textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
@@ -431,7 +431,7 @@ export default function Home() {
             </div>
 
             <div
-              className={`relative w-full h-80 lg:h-[460px] bg-surface border rounded-2xl shadow-panel overflow-y-auto transition-all duration-300 ${
+              className={`relative w-full h-52 sm:h-72 lg:h-[460px] bg-surface border rounded-2xl shadow-panel overflow-y-auto transition-all duration-300 ${
                 loading ? "border-accent/20 shadow-panel-active" : "border-border"
               }`}
             >
