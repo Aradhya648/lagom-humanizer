@@ -36,7 +36,12 @@ export type DeepEvent =
 export type EventEmitter = (event: DeepEvent) => void;
 
 const GEMINI_TIMEOUT_MS = 30_000;
-const MAX_DEEP_SESSIONS = 2;
+// Railway has limited RAM — 2 concurrent Playwright sessions (8 Chromium contexts)
+// was causing OOM / hangs. Serialize for stability; queue the rest.
+const MAX_DEEP_SESSIONS = 1;
+// Absolute ceiling on a single deep session. If anything hangs past this,
+// release the slot so later requests aren't blocked forever.
+const DEEP_SESSION_HARD_TIMEOUT_MS = 6 * 60_000; // 6 minutes
 let activeDeepSessions = 0;
 const deepSessionWaiters: Array<() => void> = [];
 
@@ -86,10 +91,29 @@ async function acquireDeepSession(onEvent: EventEmitter): Promise<() => void> {
 
   activeDeepSessions++;
 
-  return () => {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
     activeDeepSessions = Math.max(0, activeDeepSessions - 1);
     const next = deepSessionWaiters.shift();
     if (next) next();
+  };
+
+  // Safety net: auto-release the slot after the hard timeout, even if the
+  // owning request is still running. Prevents permanently stuck queue.
+  const autoRelease = setTimeout(() => {
+    if (!released) {
+      console.log(`[deep session] auto-release after ${DEEP_SESSION_HARD_TIMEOUT_MS}ms — slot was held too long`);
+      release();
+    }
+  }, DEEP_SESSION_HARD_TIMEOUT_MS);
+  // Don't keep the event loop alive just for this.
+  if (typeof autoRelease.unref === "function") autoRelease.unref();
+
+  return () => {
+    clearTimeout(autoRelease);
+    release();
   };
 }
 

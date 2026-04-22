@@ -553,41 +553,106 @@ async function scrapeOriginalityPage(page: Page, text: string): Promise<Detector
 
 // ─── Coordinator ─────────────────────────────────────────────────────────────
 
+// Per-scraper hard ceiling — no individual detector can block the round longer than this
+const SCRAPER_HARD_TIMEOUT_MS = 60_000;
+// Whole-round hard ceiling — even if all 4 hang, this guarantees the round ends
+const SCORE_ALL_HARD_TIMEOUT_MS = 90_000;
+
+function withScraperTimeout(
+  name: string,
+  p: Promise<DetectorScore>,
+): Promise<DetectorScore> {
+  return new Promise<DetectorScore>((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      console.log(`[scrapers] ${name} hard-timeout after ${SCRAPER_HARD_TIMEOUT_MS}ms`);
+      resolve({ score: -1, label: `${name}: hard timeout`, flaggedSentences: [] });
+    }, SCRAPER_HARD_TIMEOUT_MS);
+    p.then((v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(v);
+    }).catch((err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      console.log(`[scrapers] ${name} rejected:`, err instanceof Error ? err.message : String(err));
+      resolve({ score: -1, label: `${name}: error`, flaggedSentences: [] });
+    });
+  });
+}
+
 export async function scoreAllDetectors(text: string): Promise<AllScores> {
-  const browser = await chromium.launch({
-    headless: true,
-    args: BROWSER_ARGS,
+  const failAll = (label: string): AllScores => ({
+    gptzero: { score: -1, label, flaggedSentences: [] },
+    zerogpt: { score: -1, label, flaggedSentences: [] },
+    quillbot: { score: -1, label, flaggedSentences: [] },
+    originality: { score: -1, label, flaggedSentences: [] },
   });
 
-  try {
-    const [ctx1, ctx2, ctx3, ctx4] = await Promise.all([
-      newStealthContext(browser),
-      newStealthContext(browser),
-      newStealthContext(browser),
-      newStealthContext(browser),
-    ]);
+  const work = (async (): Promise<AllScores> => {
+    const browser = await chromium.launch({
+      headless: true,
+      args: BROWSER_ARGS,
+    });
 
-    const [p1, p2, p3, p4] = await Promise.all([
-      ctx1.newPage(),
-      ctx2.newPage(),
-      ctx3.newPage(),
-      ctx4.newPage(),
-    ]);
+    try {
+      const [ctx1, ctx2, ctx3, ctx4] = await Promise.all([
+        newStealthContext(browser),
+        newStealthContext(browser),
+        newStealthContext(browser),
+        newStealthContext(browser),
+      ]);
 
-    const [gptzero, zerogpt, quillbot, originality] = await Promise.all([
-      scrapeGPTZeroPage(p1, text),
-      scrapeZeroGPTPage(p2, text),
-      scrapeQuillBotPage(p3, text),
-      scrapeOriginalityPage(p4, text),
-    ]);
+      const [p1, p2, p3, p4] = await Promise.all([
+        ctx1.newPage(),
+        ctx2.newPage(),
+        ctx3.newPage(),
+        ctx4.newPage(),
+      ]);
 
-    console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score} originality=${originality.score}`);
-    console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} quillbot=${quillbot.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
+      // Each scraper is guarded with its own hard timeout so one hang can't stall the round.
+      const [gptzero, zerogpt, quillbot, originality] = await Promise.all([
+        withScraperTimeout("gptzero", scrapeGPTZeroPage(p1, text)),
+        withScraperTimeout("zerogpt", scrapeZeroGPTPage(p2, text)),
+        withScraperTimeout("quillbot", scrapeQuillBotPage(p3, text)),
+        withScraperTimeout("originality", scrapeOriginalityPage(p4, text)),
+      ]);
 
-    return { gptzero, zerogpt, quillbot, originality };
-  } finally {
-    await browser.close();
-  }
+      console.log(`[scrapers] gptzero=${gptzero.score} zerogpt=${zerogpt.score} quillbot=${quillbot.score} originality=${originality.score}`);
+      console.log(`[scrapers] flagged: gptzero=${gptzero.flaggedSentences.length} zerogpt=${zerogpt.flaggedSentences.length} quillbot=${quillbot.flaggedSentences.length} originality=${originality.flaggedSentences.length}`);
+
+      return { gptzero, zerogpt, quillbot, originality };
+    } finally {
+      await browser.close().catch(() => null);
+    }
+  })();
+
+  // Outer safety net — guarantees this function resolves no matter what Playwright does.
+  return await new Promise<AllScores>((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      console.log(`[scrapers] scoreAllDetectors HARD TIMEOUT after ${SCORE_ALL_HARD_TIMEOUT_MS}ms — returning empty scores`);
+      resolve(failAll("round timed out"));
+    }, SCORE_ALL_HARD_TIMEOUT_MS);
+    work.then((v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(v);
+    }).catch((err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      console.log(`[scrapers] scoreAllDetectors rejected:`, err instanceof Error ? err.message : String(err));
+      resolve(failAll("round error"));
+    });
+  });
 }
 
 export async function scrapeSingleDetector(
