@@ -994,18 +994,28 @@ async function finishHumanizedText(
   register: SourceRegister,
   inputWordCount: number
 ): Promise<string> {
-  // STRIPPED-BACK pipeline: every "injector" we added (parentheticals,
-  // bridges, em-dash asides, perplexity hedges, synonym swaps) was adding
-  // MORE AI-flavored noise, not less. Gemini's own "human-sounding" output
-  // is already AI-typical; layering injectors on top compounds the problem.
+  // Glory-days deterministic stack (restored from commit 1007a90), minus
+  // emDashInjector which was proven to REGRESS ZeroGPT/QuillBot scores
+  // (8%→24% and 16%→62% observed during earlier testing).
   //
-  // Kept: basic cleanup + n-gram breaking + opener diversity + grammar dedup.
-  // Removed: structuralPerplexityInjector, perplexityInjector,
-  //          interParagraphDivergencePass, burstinessInjector, emDashInjector.
+  // Each pass targets a specific detector signal:
+  //  - antiPatternPass: kills AI paragraph openers
+  //  - rhetoricalSuppressionPass: strips connector/fluency overload
+  //  - zeroGPTNgramBreaker: 30 hardcoded n-gram pattern rules
+  //  - structuralPerplexityInjector: parentheticals, semicolons, clause breaks
+  //  - perplexityInjector: up to 3 rare synonym swaps per paragraph
+  //  - interParagraphDivergencePass: cross-paragraph vocab variance
+  //  - burstinessInjector: forces sentence-length variance (GPTZero #1 signal)
+  //  - openerDiversityPass: no duplicate sentence-starting words
+  //  - grammarAndDedupPass: post-injector cleanup (kept from recent work)
   const cleaned = antiPatternPass(text, register);
   const suppressed = rhetoricalSuppressionPass(cleaned);
   const ngramBroken = zeroGPTNgramBreaker(suppressed);
-  const opened = openerDiversityPass(ngramBroken);
+  const structPerplexed = structuralPerplexityInjector(ngramBroken, register);
+  const perplexed = perplexityInjector(structPerplexed, register);
+  const diverged = interParagraphDivergencePass(perplexed);
+  const bursty = burstinessInjector(diverged, register);
+  const opened = openerDiversityPass(bursty);
   const grammarClean = grammarAndDedupPass(opened);
   const lengthCapped = enforceLengthDiscipline(grammarClean, inputWordCount);
 
@@ -1041,14 +1051,11 @@ ${current}`;
   return enforceLengthDiscipline(current, Math.round(inputWordCount * (HARD_CEILING / inputWordCount)));
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
 // ─── Translation Round-Trip Humanization ──────────────────────────────────────
-// Core insight: AI detectors (ZeroGPT, QuillBot, GPTZero) are trained on
-// direct AI output. When we translate English → Spanish → English, the
-// result has the statistical signature of TRANSLATED text, not AI text.
-// Different sentence structures, different collocations, different rhythm —
-// all native to human translation, foreign to AI detection models.
+// Deep-mode nuclear-reset weapon only. NOT used by fast-mode humanize() —
+// see commit history for why (regression when used as the primary pipeline).
+// Called by lib/deep-humanizer.ts pivot-rotation fallback when iterative
+// sentence surgery plateaus.
 
 export type PivotLanguage = "Chinese" | "Arabic" | "Japanese" | "Korean" | "Spanish" | "French" | "German";
 
@@ -1240,29 +1247,45 @@ export async function humanize(
   const inputWordCount = truncated.split(/\s+/).length;
   const register = classifyRegister(truncated);
 
-  // Very short inputs (<30 words): skip round-trip — meaning drift risk is
-  // too high relative to quality gain. Use simple single-pass rewrite.
+  // Very short inputs (<30 words): single-pass is safer than multi-pass —
+  // chunking overhead + meaning drift risk outweigh the quality gain.
   if (inputWordCount < 30) {
     const singlePass = await singlePassHumanize(truncated, contentType);
     return finishHumanizedText(singlePass, register, inputWordCount);
   }
 
-  // Main path: Spanish round-trip. This is where the detector-evasion
-  // magic happens — translated-back English has a statistical signature
-  // that ZeroGPT/QuillBot's classifiers don't recognize as AI.
+  // GLORY-DAYS pipeline (restored from commit 1007a90):
+  //   Chunk → structural (parallel) → semantic (parallel) → mutation (gated)
+  //   → finishHumanizedText (9 deterministic passes).
+  //
+  // This is the pipeline that produced 99% Human on GPTZero, 0% on ZeroGPT,
+  // ~0% on QuillBot — WITHOUT deep mode. Round-trip translation has been
+  // demoted to a deep-mode-only weapon (see roundTripHumanize, still exported
+  // for use by lib/deep-humanizer.ts nuclear-reset path).
   try {
-    const roundTripped = await roundTripHumanize(truncated, register, "Chinese");
-    // Sanity check: if round-trip produced far less text than input,
-    // it likely truncated during translation — fall back to single-pass.
-    const outWords = roundTripped.trim().split(/\s+/).length;
-    if (outWords < Math.ceil(inputWordCount * 0.60)) {
-      console.warn(`[humanize] round-trip output too short (${outWords}/${inputWordCount}) — falling back to single-pass`);
-      const singlePass = await singlePassHumanize(truncated, contentType);
-      return finishHumanizedText(singlePass, register, inputWordCount);
-    }
-    return finishHumanizedText(roundTripped, register, inputWordCount);
+    const chunks = splitIntoVariableChunks(truncated);
+
+    // Pass 1: Structural rewrite (parallel per chunk)
+    const structural = await structuralPass(chunks, contentType);
+
+    // Pass 2: Semantic naturalness (parallel per chunk)
+    const semantic = await semanticPass(structural, contentType);
+    const merged = semantic.join("\n\n");
+
+    // Pass 3: Targeted mutation — only fire if internal detector still
+    // thinks the text is synthetic. Skipping when already human-sounding
+    // avoids over-paraphrasing and preserves meaning/tone/word count.
+    const { score: midScore } = detectAI(merged);
+    const mutated = midScore > 25
+      ? await mutationPass(merged, contentType).catch(() => merged)
+      : merged;
+
+    return finishHumanizedText(mutated, register, inputWordCount);
   } catch (err) {
-    console.error("[humanize] round-trip failed, falling back to single-pass:", err instanceof Error ? err.message : err);
+    console.error(
+      "[humanize] multi-pass failed, falling back to single-pass:",
+      err instanceof Error ? err.message : err
+    );
     const singlePass = await singlePassHumanize(truncated, contentType);
     return finishHumanizedText(singlePass, register, inputWordCount);
   }
