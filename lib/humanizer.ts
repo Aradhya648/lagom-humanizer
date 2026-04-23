@@ -450,6 +450,40 @@ const DEAD_PHRASES: RegExp[] = [
   /\s*\bThis cannot be overstated\.\s*/gi,
   /\s*\bThis is especially true\b\s*/gi,
   /\s*\bneedless to say,?\s*/gi,
+  // Legacy lagom-humanizer bridge phrases — defensive strip in case an
+  // older burstinessInjector output is still cached or re-entered.
+  /\s*\bThis distinction matters\.\s*/gi,
+  /\s*\bThat much is certain\.\s*/gi,
+  /\s*\bThe pattern holds\.\s*/gi,
+  /\s*\bThis warrants scrutiny\.\s*/gi,
+  /\s*\bThe implications run deep\.\s*/gi,
+  /\s*\bNot all scholars agree\.\s*/gi,
+  /\s*\bThe data confirms this\.\s*/gi,
+  /\s*\bThis remains contested\.\s*/gi,
+  /\s*\bThat part matters\.\s*/gi,
+  /\s*\bThis changed things\.\s*/gi,
+  /\s*\bThe difference is real\.\s*/gi,
+  /\s*\bNot everyone agrees\.\s*/gi,
+  /\s*\bSimple as that\.\s*/gi,
+  /\s*\bThe point stands\.\s*/gi,
+];
+
+// Legacy lagom-humanizer parentheticals — defensive strip.
+const LEGACY_PARENS: RegExp[] = [
+  /\s*\(though this remains debated\)/gi,
+  /\s*\(at least in the current literature\)/gi,
+  /\s*\(admittedly\)/gi,
+  /\s*\(to varying degrees\)/gi,
+  /\s*\(with some exceptions\)/gi,
+  /\s*\(broadly speaking\)/gi,
+  /\s*\(in most formulations\)/gi,
+  /\s*\(as one might expect\)/gi,
+  /\s*\(though not always\)/gi,
+  /\s*\(at least in theory\)/gi,
+  /\s*\(more or less\)/gi,
+  /\s*\(to some extent\)/gi,
+  /\s*\(roughly speaking\)/gi,
+  /\s*\(in most cases\)/gi,
 ];
 
 export function patternKillerPass(text: string): string {
@@ -466,6 +500,18 @@ export function patternKillerPass(text: string): string {
   for (const re of DEAD_PHRASES) {
     result = result.replace(re, " ");
   }
+
+  // 3b. Legacy parentheticals from older structuralPerplexityInjector
+  for (const re of LEGACY_PARENS) {
+    result = result.replace(re, "");
+  }
+
+  // 3c. Em-dash list fingerprint: "X — along with Y" → "X, and Y"
+  result = result.replace(/\s+—\s+along\s+with\s+/gi, ", and ");
+
+  // 3d. "However," at sentence start → drop. Weak contrast signal that
+  // reads as textbook topic-sentence cadence.
+  result = result.replace(/(^|\.\s+|\?\s+|!\s+|\n)However,\s+/g, "$1");
 
   // 4. Topic-sentence template: "is one of X's biggest/largest/greatest/most N"
   //    "is one of AI's biggest benefits" → "is a top AI benefit"
@@ -686,44 +732,29 @@ function findClauseBoundaryCommas(sentence: string): number[] {
 }
 
 export function structuralPerplexityInjector(text: string, register: SourceRegister): string {
-  const isFormal = register === "academic" || register === "formal";
-  const parens = isFormal ? FORMAL_PARENS : CASUAL_PARENS;
+  // DISABLED Modes A (parenthetical insertion) and B (em-dash list break):
+  // both were adding identifiable lagom-humanizer fingerprints that detectors
+  // now flag. Examples observed in the wild:
+  //   A → "(admittedly)", "(broadly speaking)", "(with some exceptions)"
+  //   B → "fair and effective — along with truly engaging for everyone"
+  // Only Mode C (comma → semicolon at clause boundary) survives — semicolons
+  // are legitimate human punctuation and haven't been flagged.
+  void register; void FORMAL_PARENS; void CASUAL_PARENS; void LIST_RE;
   const paragraphs = text.split(/\n\s*\n/);
   let totalMods = 0;
 
-  const result = paragraphs.map((para, pIdx) => {
+  const result = paragraphs.map((para) => {
     if (totalMods >= 4) return para;
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
     let paraModCount = 0;
 
-    const processed = sentences.map((sentence, sIdx) => {
+    const processed = sentences.map((sentence) => {
       if (paraModCount >= 1) return sentence;
       const words = sentence.split(/\s+/).length;
 
-      // A: Parenthetical insertion ONLY at a clause-boundary comma (followed by
-      // a subordinator/conjunction). This prevents landing inside a compound
-      // noun or list item.
-      if (words >= 18 && sIdx >= 1 && sIdx <= 2) {
-        const boundaries = findClauseBoundaryCommas(sentence);
-        // Prefer a boundary roughly in the middle third of the sentence
-        const candidate = boundaries.find(b => b > 15 && b < sentence.length - 25);
-        if (candidate !== undefined) {
-          const paren = parens[(pIdx + sIdx + totalMods) % parens.length];
-          paraModCount++; totalMods++;
-          return `${sentence.slice(0, candidate + 1)} ${paren}${sentence.slice(candidate + 1)}`;
-        }
-      }
-
-      // B: Break "X, Y, and Z" list pattern (unchanged — operates on full
-      // 3-item lists only, grammar-safe).
-      if (LIST_RE.test(sentence) && paraModCount < 1) {
-        const modified = sentence.replace(LIST_RE, (_, a, b, c) => `${a} and ${b} — along with ${c}`);
-        if (modified !== sentence) { paraModCount++; totalMods++; return modified; }
-      }
-
       // C: Comma → semicolon ONLY at a clause boundary comma.
-      if (words >= 20 && paraModCount < 1) {
+      if (words >= 20) {
         const boundaries = findClauseBoundaryCommas(sentence);
         const candidate = boundaries.find(b => b > 15 && b < sentence.length - 15);
         if (candidate !== undefined) {
@@ -853,21 +884,12 @@ export function burstinessInjector(text: string, register: SourceRegister): stri
       }
     }
 
-    // Strategy B: Bridge injection — only ONCE per full pass (not per
-    // paragraph) to avoid literal duplicate sentences like "The data
-    // confirms this." appearing multiple times.
-    // Also: skip if ANY bridge phrase already exists in this paragraph
-    // (prevents "That part matters. That part matters." from accumulating
-    // across multiple applyDeterministicPasses calls over iterations).
-    if (!didModify && modified.length >= 3 && totalInjections === 0) {
-      const bridge = bridges[pIdx % bridges.length];
-      const paraText = modified.join(" ").toLowerCase();
-      const bridgeAlreadyPresent = bridges.some(b => paraText.includes(b.toLowerCase().slice(0, -1)));
-      if (!bridgeAlreadyPresent) {
-        modified.splice(1, 0, bridge);
-        totalInjections++;
-      }
-    }
+    // Strategy B DISABLED: bridge injection was inserting canned phrases
+    // like "This distinction matters." and "The evidence is clear." that
+    // detectors now flag as lagom-humanizer fingerprints. Strategy A above
+    // (sentence split at coordinator) handles burstiness without injecting
+    // canned text.
+    void bridges; void pIdx;
 
     return modified.join(" ");
   });
