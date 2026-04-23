@@ -410,6 +410,87 @@ export function rhetoricalSuppressionPass(text: string): string {
   return result;
 }
 
+// ─── Pattern Killers ─────────────────────────────────────────────────────────
+// Targets specific LLM fingerprints observed in detector flags:
+//   - "X, Y, and Z alike" triplet endings (ZeroGPT/QuillBot magnet)
+//   - "The evidence is clear." / "It is clear that" dead phrases
+//   - "is one of X's biggest/most Y" topic-sentence template
+//   - Tautological adjective pairs ("careful and thoughtful")
+// These all survived the old antiPatternPass because that pass only touches
+// sentence openers. These run as replacements anywhere in the paragraph.
+
+const TAUTOLOGY_PAIRS: Array<[RegExp, string]> = [
+  [/\bcareful and thoughtful\b/gi, "careful"],
+  [/\bthoughtful and careful\b/gi, "thoughtful"],
+  [/\bfair and equitable\b/gi, "fair"],
+  [/\bequitable and fair\b/gi, "equitable"],
+  [/\beffective and engaging\b/gi, "engaging"],
+  [/\bengaging and effective\b/gi, "effective"],
+  [/\bmeaningful and lasting\b/gi, "lasting"],
+  [/\blasting and meaningful\b/gi, "lasting"],
+  [/\bclear and concise\b/gi, "clear"],
+  [/\bconcise and clear\b/gi, "concise"],
+  [/\bsafe and secure\b/gi, "secure"],
+  [/\bsimple and easy\b/gi, "simple"],
+  [/\beasy and simple\b/gi, "easy"],
+  [/\bthorough and comprehensive\b/gi, "thorough"],
+  [/\bcomprehensive and thorough\b/gi, "comprehensive"],
+  [/\bcritical and measured\b/gi, "measured"],
+  [/\bmeasured and critical\b/gi, "measured"],
+  [/\brigorous and systematic\b/gi, "rigorous"],
+  [/\bethical and responsible\b/gi, "responsible"],
+  [/\bresponsible and ethical\b/gi, "responsible"],
+  [/\binnovative and creative\b/gi, "creative"],
+  [/\bcreative and innovative\b/gi, "creative"],
+];
+
+const DEAD_PHRASES: RegExp[] = [
+  /\s*\bThe evidence is clear\.\s*/gi,
+  /\s*\bIt is clear that\b\s*/gi,
+  /\s*\bThis cannot be overstated\.\s*/gi,
+  /\s*\bThis is especially true\b\s*/gi,
+  /\s*\bneedless to say,?\s*/gi,
+];
+
+export function patternKillerPass(text: string): string {
+  let result = text;
+
+  // 1. Triplet ending with "alike" — strip "alike"
+  //    "teachers, rule-makers, and students alike." → "teachers, rule-makers, and students."
+  result = result.replace(/(\b\w+),\s+([\w-]+),\s+and\s+([\w-]+)\s+alike\b/gi, "$1, $2, and $3");
+
+  // 2. "X and Y alike" — 2-term version
+  result = result.replace(/(\b[\w-]+)\s+and\s+([\w-]+)\s+alike\b/gi, "$1 and $2");
+
+  // 3. Dead topic-sentence phrases
+  for (const re of DEAD_PHRASES) {
+    result = result.replace(re, " ");
+  }
+
+  // 4. Topic-sentence template: "is one of X's biggest/largest/greatest/most N"
+  //    "is one of AI's biggest benefits" → "is a top AI benefit"
+  result = result.replace(
+    /\bis\s+one\s+of\s+([\w'-]+?)(?:'s|'s)\s+(biggest|largest|greatest|most\s+important|most\s+significant|key)\s+(\w+s)\b/gi,
+    (_m, owner: string, _mag: string, noun: string) => `is a top ${owner} ${noun.replace(/s$/, "")}`
+  );
+
+  // 5. Generic "is one of the biggest/most N" → "is a major N"
+  result = result.replace(
+    /\bis\s+one\s+of\s+the\s+(biggest|largest|greatest|most\s+important|most\s+significant)\s+(\w+s)\b/gi,
+    (_m, _mag: string, noun: string) => `is a major ${noun.replace(/s$/, "")}`
+  );
+
+  // 6. Tautological adjective pairs
+  for (const [pattern, replacement] of TAUTOLOGY_PAIRS) {
+    result = result.replace(pattern, replacement);
+  }
+
+  // 7. Collapse any double-spaces introduced by the kills
+  result = result.replace(/[ \t]{2,}/g, " ").replace(/\s+([.!?,;:])/g, "$1");
+
+  return result;
+}
+
 // ─── Plain Language Pass (formerly Perplexity Injector) ─────────────────────
 // INVERTED from the old design. Modern AI detectors (GPTZero 4.4b "Possible AI
 // Paraphrasing") flag ornate vocabulary as an AI-paraphrased fingerprint.
@@ -604,7 +685,7 @@ function findClauseBoundaryCommas(sentence: string): number[] {
   return out;
 }
 
-function structuralPerplexityInjector(text: string, register: SourceRegister): string {
+export function structuralPerplexityInjector(text: string, register: SourceRegister): string {
   const isFormal = register === "academic" || register === "formal";
   const parens = isFormal ? FORMAL_PARENS : CASUAL_PARENS;
   const paragraphs = text.split(/\n\s*\n/);
@@ -687,7 +768,7 @@ const DIV_STOP = new Set(["the","a","an","and","or","but","in","on","at","to","f
   "could","should","may","might","this","that","these","those","it","its","they","them","their",
   "we","our","you","your","he","she","his","her","as","if","so","not","also","can","into"]);
 
-function interParagraphDivergencePass(text: string): string {
+export function interParagraphDivergencePass(text: string): string {
   const paragraphs = text.split(/\n\s*\n/);
   if (paragraphs.length < 2) return text;
   const paraWords = paragraphs.map(para =>
@@ -874,15 +955,40 @@ const OPENER_SWAPS: Record<string, string[]> = {
   "both": ["Each","Either","The two"],
 };
 
+// Demonstrative-class openers — "This", "These", "Those", "That", "It" all
+// act as pointers-to-previous-sentence and cluster in LLM output. Detectors
+// key heavily on this cadence, so we treat them as a single class and force
+// a swap on any occurrence past the first in a paragraph.
+const DEMONSTRATIVE_OPENERS = new Set(["this", "these", "those", "that", "it"]);
+
 export function openerDiversityPass(text: string): string {
   return text.split(/\n\s*\n/).map((para) => {
     const sentences = getSentences(para);
     if (sentences.length < 2) return para;
     let swaps = 0;
+    let demonstrativeCount = 0;
     const seen = new Map<string, number>();
     const rewritten = sentences.map((s, i) => {
       if (swaps >= 2) return s;
       const firstWord = s.split(/\s+/)[0].toLowerCase().replace(/[^a-z]/g, "");
+
+      // Demonstrative-class tracking: any second+ demonstrative opener
+      // gets treated as a repeat even if the exact word differs.
+      if (DEMONSTRATIVE_OPENERS.has(firstWord)) {
+        demonstrativeCount++;
+        if (demonstrativeCount > 1) {
+          const alts = OPENER_SWAPS[firstWord];
+          if (alts) {
+            const body = s.slice(firstWord.length).trimStart();
+            const alt = alts[(i + para.length) % alts.length];
+            swaps++;
+            return alt + (alt.endsWith(",") ? " " + body.charAt(0).toLowerCase() + body.slice(1) : " " + body);
+          }
+        }
+        seen.set(firstWord, i);
+        return s;
+      }
+
       const prevIdx = seen.get(firstWord);
       if (prevIdx !== undefined && i > prevIdx) {
         const alts = OPENER_SWAPS[firstWord];
@@ -1010,7 +1116,8 @@ async function finishHumanizedText(
   //  - grammarAndDedupPass: post-injector cleanup (kept from recent work)
   const cleaned = antiPatternPass(text, register);
   const suppressed = rhetoricalSuppressionPass(cleaned);
-  const ngramBroken = zeroGPTNgramBreaker(suppressed);
+  const patternKilled = patternKillerPass(suppressed);
+  const ngramBroken = zeroGPTNgramBreaker(patternKilled);
   const structPerplexed = structuralPerplexityInjector(ngramBroken, register);
   const perplexed = perplexityInjector(structPerplexed, register);
   const diverged = interParagraphDivergencePass(perplexed);

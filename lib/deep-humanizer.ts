@@ -12,8 +12,14 @@ import {
   classifyRegister,
   antiPatternPass,
   rhetoricalSuppressionPass,
+  patternKillerPass,
   zeroGPTNgramBreaker,
+  structuralPerplexityInjector,
+  perplexityInjector,
+  interParagraphDivergencePass,
+  burstinessInjector,
   openerDiversityPass,
+  grammarAndDedupPass,
   type SourceRegister,
   type PivotLanguage,
 } from "@/lib/humanizer";
@@ -400,13 +406,22 @@ function applyDeterministicPasses(text: string, register: SourceRegister): strin
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  // STRIPPED-BACK: removed perplexityInjector + burstinessInjector.
-  // They were adding "(though certainly to varying degrees)" and
-  // "That part matters." bridges that themselves read as AI-generated.
+  // Full glory-days deterministic stack — mirrors finishHumanizedText() in
+  // humanizer.ts. The previous stripped-back version skipped perplexity and
+  // burstiness injectors, but that left round-trip output un-finished:
+  // Gemini's Chinese→English retranslation was re-polishing text into clean
+  // academic prose and the 4 remaining passes couldn't rough it up enough.
+  // Observed regression: fast mode ZeroGPT 17% → deep mode 58% on same input.
   result = antiPatternPass(result, register);
   result = rhetoricalSuppressionPass(result);
+  result = patternKillerPass(result);
   result = zeroGPTNgramBreaker(result);
+  result = structuralPerplexityInjector(result, register);
+  result = perplexityInjector(result, register);
+  result = interParagraphDivergencePass(result);
+  result = burstinessInjector(result, register);
   result = openerDiversityPass(result);
+  result = grammarAndDedupPass(result);
   return result;
 }
 
