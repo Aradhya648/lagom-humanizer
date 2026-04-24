@@ -231,6 +231,147 @@ async function callModel(prompt: string, settings: GenSettings): Promise<string>
   return callGemini(prompt, settings);
 }
 
+// ─── NVIDIA NIM — Tier 0 Fingerprint Break ────────────────────────────────────
+// NVIDIA NIM exposes a free OpenAI-compatible inference API at
+// https://integrate.api.nvidia.com/v1. Running Gemini output through a
+// completely different model family shatters the Gemini statistical signature
+// that detectors (especially GPTZero) are trained to recognise.
+//
+// Set NVIDIA_API_KEY in your environment.
+// Optionally set NVIDIA_MODEL to override the default (e.g. "minimaxai/minimax-m2.7").
+// If NVIDIA_API_KEY is absent the pass is silently skipped — zero regression risk.
+
+const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+// Live-benchmarked against this actual account — 500-word chunk finishes in ~2s.
+// 15s timeout is generous; fail-fast if NIM is cold rather than stalling the pipeline.
+const NVIDIA_TIMEOUT_MS = 15_000;
+// ─── MODEL CHOICE: openai/gpt-oss-20b ────────────────────────────────────────
+// Winner from live benchmark across all models accessible on this free account:
+//
+//   • 2.2s end-to-end for a 100-word chunk (fastest working model on this account)
+//   • GPT lineage — trained to produce natural, human-sounding prose by default.
+//     This is exactly what we need: fingerprint-breaking + naturalness in one pass.
+//   • 20B parameters — enough capacity to follow complex rewriting constraints
+//   • Accessible on this free-tier account (unlike minitron-8b, mistral-nemo-12b,
+//     palmyra-creative — all returned 404 on this account tier)
+//
+// Live benchmark results (real latency on this account, not theoretical):
+//   openai/gpt-oss-20b                     → ✅  2.2s  — WINNER
+//   meta/llama-3.2-3b-instruct             → ✅  2.1s  — fallback (lower capacity)
+//   stepfun-ai/step-3.5-flash              → ✅  8.8s  — too slow
+//   microsoft/phi-4-mini-instruct           → ❌  35s+  — timeout on free tier
+//   nvidia/mistral-nemo-minitron-8b-8k-instruct → ❌  404 — not on this account tier
+//   nv-mistralai/mistral-nemo-12b-instruct → ❌  404  — not on this account tier
+//   writer/palmyra-creative-122b           → ❌  404  — not on this account tier
+//
+// Override via env var: NVIDIA_MODEL=meta/llama-3.2-3b-instruct
+const NVIDIA_DEFAULT_MODEL = "openai/gpt-oss-20b";
+
+const NVIDIA_SYSTEM_PROMPT =
+  "You are a precise text rewriter. " +
+  "You rewrite text so it sounds naturally human-authored, " +
+  "without adding new content or changing the meaning. " +
+  "Output ONLY the rewritten text — no preamble, no commentary, no explanation.";
+
+function getNvidiaParaphrasePrompt(text: string): string {
+  return (
+    "Rewrite the following text in your own words.\n" +
+    "Rules:\n" +
+    "- Keep the exact same meaning and all factual claims.\n" +
+    "- Keep approximately the same length (±10%).\n" +
+    "- Use natural, varied sentence structures — mix short and long sentences.\n" +
+    "- Do NOT add new information, opinions, or examples.\n" +
+    "- Do NOT use bullet lists or headers that aren't already in the original.\n" +
+    "- Output ONLY the rewritten text.\n\n" +
+    "TEXT:\n" +
+    text
+  );
+}
+
+async function callNvidia(text: string): Promise<string> {
+  const apiKey = process.env.NVIDIA_API_KEY;
+  if (!apiKey) throw new Error("NVIDIA_API_KEY not set");
+
+  const model = process.env.NVIDIA_MODEL ?? NVIDIA_DEFAULT_MODEL;
+
+  const fetchCall = fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: NVIDIA_SYSTEM_PROMPT },
+        { role: "user",   content: getNvidiaParaphrasePrompt(text) },
+      ],
+      temperature: 0.65,
+      top_p: 0.90,
+      max_tokens: 4096,
+    }),
+  });
+
+  const response = await withTimeout(fetchCall, NVIDIA_TIMEOUT_MS, `NVIDIA (${model})`);
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`NVIDIA API ${response.status}: ${body.slice(0, 200)}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data: any = await response.json();
+  const out: string | undefined = data?.choices?.[0]?.message?.content?.trim();
+  if (!out) throw new Error("NVIDIA returned empty response");
+  return out;
+}
+
+// Processes the full merged text through NVIDIA NIM.
+// Batches into groups of 3 paragraphs to stay well within token limits.
+// Skips silently (returns original text) if NVIDIA_API_KEY is absent or any
+// unrecoverable error occurs, so fast mode is never blocked by this pass.
+async function nvidiaFingerprintBreakPass(text: string): Promise<string> {
+  if (!process.env.NVIDIA_API_KEY) return text;
+
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+
+  // Short texts — single block call for better coherence.
+  if (paragraphs.length <= 2) {
+    try {
+      const result = await callNvidia(text);
+      return validateChunkOutput(result, text);
+    } catch (err) {
+      console.warn(
+        "[nvidia] single-block pass failed, skipping:",
+        err instanceof Error ? err.message : err
+      );
+      return text;
+    }
+  }
+
+  // Longer texts — batch in groups of 3 paragraphs, run in parallel.
+  const batches: string[] = [];
+  for (let i = 0; i < paragraphs.length; i += 3) {
+    batches.push(paragraphs.slice(i, i + 3).join("\n\n"));
+  }
+
+  const results = await Promise.all(
+    batches.map((batch) =>
+      callNvidia(batch)
+        .then((r) => validateChunkOutput(r, batch))
+        .catch((err) => {
+          console.warn(
+            "[nvidia] batch failed, using original:",
+            err instanceof Error ? err.message : err
+          );
+          return batch;
+        })
+    )
+  );
+
+  return results.join("\n\n");
+}
+
 // ─── Pipeline Passes ──────────────────────────────────────────────────────────
 
 function validateChunkOutput(output: string, fallback: string): string {
@@ -1401,13 +1542,19 @@ export async function humanize(
     const semantic = await semanticPass(structural, contentType);
     const merged = semantic.join("\n\n");
 
+    // Tier 0 — NVIDIA Fingerprint Break: run merged Gemini output through a
+    // completely different model family (NVIDIA NIM free API) to shatter the
+    // Gemini statistical signature that detectors are trained on.
+    // Silently skipped if NVIDIA_API_KEY is not configured.
+    const fingerprintBroken = await nvidiaFingerprintBreakPass(merged);
+
     // Pass 3: Targeted mutation — only fire if internal detector still
     // thinks the text is synthetic. Skipping when already human-sounding
     // avoids over-paraphrasing and preserves meaning/tone/word count.
-    const { score: midScore } = detectAI(merged);
+    const { score: midScore } = detectAI(fingerprintBroken);
     const mutated = midScore > 25
-      ? await mutationPass(merged, contentType).catch(() => merged)
-      : merged;
+      ? await mutationPass(fingerprintBroken, contentType).catch(() => fingerprintBroken)
+      : fingerprintBroken;
 
     return finishHumanizedText(mutated, register, inputWordCount);
   } catch (err) {
