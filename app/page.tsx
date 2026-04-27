@@ -1,9 +1,7 @@
-"use client";
-
-import { useState } from "react";
-
-const x: string = undeclaredVariable + 1;
-
 export default function Home() {
-  return <div>{x}</div>;
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-between p-24">
+      <h1>Lagom Humanizer</h1>
+    </main>
+  );
 }
