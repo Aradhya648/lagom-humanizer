@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from "next";
+import { nonExistentUtil } from "totally-fake-package-abc";
 import "./globals.css";
 
 export const viewport: Viewport = {
-  width: "device-width",
+  width: 1280,
   initialScale: 1,
   viewportFit: "cover",
 };
