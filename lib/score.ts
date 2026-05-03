@@ -10,7 +10,6 @@ export function classifyScore(score: number): "human" | "ai" | "mixed" {
   return "mixed"
 }
 
-// Bug: returns number but declared as string
 export function getScoreLabel(score: number): string {
-  return score * 100
+  return `${score * 100}`
 }
