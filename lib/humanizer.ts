@@ -1105,7 +1105,7 @@ function emDashInjector(text: string, register: SourceRegister): string {
 const OPENER_SWAPS: Record<string, string[]> = {
   "this": ["That","The","It"], "the": ["Its","That","Each"],
   "it": ["This","That","The result"], "these": ["Such","Those","The"],
-  "there": ["Here","That said,","In practice,"], "that": ["This","It","The fact"],
+  "there": ["Here","That said,","In practice,"], "that": ["This","It","Such"],
   "they": ["Both","Each of them","Those"], "we": ["Our","In doing so,","The team"],
   "one": ["A key","Each","An important"], "when": ["As","Once","Wherever"],
   "while": ["Although","Even as","As"], "since": ["Because","As","Given that"],
