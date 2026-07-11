@@ -201,16 +201,16 @@ Applied in `finishHumanizedText()` in this exact order. Each pass is pure (no LL
 | 2 | `rhetoricalSuppressionPass` | Strip connector/fluency overload | Overuse of "however", "therefore", "nevertheless" |
 | 3 | `patternKillerPass` | Remove LLM fingerprint phrases | "X, Y, and Z alike", "The evidence is clear.", tautological pairs |
 | 4 | `zeroGPTNgramBreaker` | Disrupt AI n-gram patterns | 30 hardcoded n-gram rewrite rules ZeroGPT flags |
-| 5 | `structuralPerplexityInjector` | Add legitimate punctuation variety | Mode C only: comma → semicolon at clause boundaries |
+| 5 | `structuralPerplexityInjector` | (currently a no-op) | Modes A, B, and now C all disabled — see below |
 | 6 | `perplexityInjector` | Rare synonym injection | Up to 3 per paragraph, register-aware |
 | 7 | `interParagraphDivergencePass` | Cross-paragraph vocab variance | Prevents same-word repetition across paragraphs |
-| 8 | `burstinessInjector` | Sentence-length variance | Strategy A only: split long sentences at coordinator commas |
-| 9 | `openerDiversityPass` | No duplicate sentence-opening words | Swaps 2nd+ occurrence in same paragraph |
-| 10 | `grammarAndDedupPass` | Cleanup + deduplication | Fixes grammar artifacts, removes duplicate sentences |
+| 8 | `burstinessInjector` | Sentence-length variance | Strategy A only: split at a comma before and/but/or/yet/so, but ONLY if it's the sentence's sole comma (rules out Oxford-comma list items) |
+| 9 | `openerDiversityPass` | No duplicate sentence-opening words | Swaps 2nd+ occurrence in same paragraph; swap table is number-agreement-safe |
+| 10 | `grammarAndDedupPass` | Cleanup + deduplication | Capitalizes sentence-starts (new safety net), fixes grammar artifacts, removes duplicate sentences |
 
 ### Disabled Passes (do not re-enable without benchmarking)
 - `emDashInjector` — proven to REGRESS ZeroGPT (8%→24%) and QuillBot (16%→62%)
-- `structuralPerplexityInjector` Modes A & B — our own phrases "(admittedly)", "(broadly speaking)" were being flagged as lagom-humanizer signatures
+- `structuralPerplexityInjector` — ALL THREE modes now disabled. A & B: our own phrases "(admittedly)", "(broadly speaking)" were being flagged as lagom-humanizer signatures. C (comma→semicolon): confirmed 2026-07-11 to produce ungrammatical semicolons before dependent clauses ("...must-have; which will take...") — function is now a pure no-op, kept only for import compatibility.
 - `burstinessInjector` Strategy B — "This distinction matters.", "The evidence is clear." bridge phrases were flagged
 
 ---
@@ -287,20 +287,18 @@ Achieved at milestone-41 (commit `1007a90`) and confirmed by the restored glory-
 ## Current State (2026-07-11)
 
 ### What's broken
-- **NVIDIA_API_KEY is set on Vercel** → gpt-oss-20b pass is active → QuillBot 78%, ZeroGPT 57.8%
 - **GitHub→Vercel auto-deploy is broken** — deploy requires `vercel --prod` CLI after every push
 - **No benchmark harness** — all testing is manual; no ground-truth spreadsheet
+- **QuillBot still not confirmed fixed on real detectors** — internal heuristic score improved after the 2026-07-11 grammar-bug fixes, but not yet re-verified against live QuillBot/ZeroGPT
 
 ### What's working
 - Full fast-mode pipeline operational
 - Deep-mode pipeline operational on Railway
-- All 10 deterministic passes active and correct
-- Grammar bug fixed (openerDiversityPass "The fact" → "Such", commit d93b077)
+- **NVIDIA_API_KEY removed from Vercel** (2026-07-11) — gpt-oss-20b pass no longer active
+- All 10 deterministic passes active; Mode C of structuralPerplexityInjector now disabled (grammar bug)
+- 4 additional grammar/structure bugs fixed 2026-07-11 (see Session Log)
 - Mobile UI, T&C page, error alerts, beta label — all live
 - Real UI restored after Prash CI sabotage (commits 6c6c5af, 25154b6)
-
-### Immediate fix required
-Unset `NVIDIA_API_KEY` in Vercel dashboard → Settings → Environment Variables. No code change needed — the pass silently no-ops when the key is absent.
 
 ---
 
@@ -368,11 +366,27 @@ This is the main attack on GPTZero. NeurIPS 2025 paper shows 87% detection reduc
 
 > Update this section at the end of every session with: date, what changed, and current scores.
 
-### 2026-07-11
-- **Changes:** Grammar bug fixed (openerDiversityPass "The fact" → "Such", commit d93b077). Real UI restored after Prash CI sabotage. NVIDIA gpt-oss-20b pass added (commit c885680) — immediately caused score regression.
+### 2026-07-11 (part 1)
+- **Changes:** Grammar bug fixed (openerDiversityPass "The fact" → "Such", commit d93b077). Real UI restored after Prash CI sabotage. NVIDIA gpt-oss-20b pass added (commit c885680) — immediately caused score regression. Created LAGOM.md (commit ed20717) after auditing all 160+ commits — confirmed no rebuild needed, peak pipeline (milestone-41) is already in the code.
 - **Scores:** QuillBot 78% (regressed from 6%), ZeroGPT 57.8% (regressed from 8%), GPTZero still bad
 - **Root cause identified:** gpt-oss-20b is GPT-lineage; QuillBot/ZeroGPT trained to detect ChatGPT outputs
 - **Next action:** Unset NVIDIA_API_KEY on Vercel + run benchmark
+
+### 2026-07-11 (part 2)
+- **Changes:** Removed `NVIDIA_API_KEY` from Vercel + redeployed. Retested on real QuillBot/ZeroGPT with 400-word and 900-word essays.
+- **Scores after NVIDIA removal:** ZeroGPT 4% / 8.8% (recovered to near-target) — **QuillBot 49% / 80% (still broken, barely moved from the regressed 78%)**
+- **Key finding:** NVIDIA was NOT the (sole) cause of the QuillBot regression. ZeroGPT doesn't weight punctuation/grammar as heavily as QuillBot's detector does. Root cause traced to real grammar bugs in the deterministic pass stack, visible directly in QuillBot's highlighted flagged text.
+- **4 bugs found and fixed (commit 4a08479), all confirmed via direct before/after testing:**
+  1. `structuralPerplexityInjector` Mode C — comma→semicolon swap fired before dependent clauses ("which", "because") and mid-list conjunctions, producing ungrammatical semicolons. Disabled (joins Modes A/B as fully off).
+  2. `OPENER_SWAPS` — "the"→"Each"/"That" and "both"→"Each"/"Either" broke singular/plural agreement ("Each relational and emotional aspects..."). Replaced with number-agnostic alternatives.
+  3. "However," strip in `patternKillerPass` didn't recapitalize the next word, leaving lowercase paragraph starts.
+  4. `burstinessInjector` Strategy A split Oxford-comma list sentences ("X, Y, and Z are proving...") into a bare fragment + orphaned sentence. Now requires the split comma to be the sentence's only comma.
+  5. **Bigger architectural bug**: `splitIntoVariableChunks` divides long paragraphs into multiple LLM-processing chunks, but `humanize()` rejoined ALL chunks with `\n\n` regardless of origin — fabricating paragraph breaks mid-paragraph. Fixed by tracking paragraph membership (`isNewParagraph[]`) through the chunk pipeline.
+  6. Added a general `capitalizeSentenceStarts()` safety net in `grammarAndDedupPass` — catches lowercase-after-period artifacts from any phrase-replacement table (this bug class showed up 3 separate times from 3 different passes; the safety net covers future occurrences too).
+- **Verification:** Ran both test essays locally against the dev server hitting real Gemini before deploying — confirmed clean paragraph structure, no fragments, no lowercase starts, no broken semicolons, in the actual API output (not just code review).
+- **Deployed:** commit 4a08479, live on lagom-one.vercel.app
+- **Not yet done:** Re-test the same two essays against live QuillBot/ZeroGPT to confirm the fix actually moves the real detector scores (internal heuristic score improved, but that's not the same as confirming on the real detector).
+- **Next action:** User to re-run the same 400-word and 900-word essays through QuillBot + ZeroGPT and report scores. If QuillBot drops meaningfully, proceed to Day 1 benchmark harness. If not, the remaining QuillBot signal is likely coming from the LLM output itself (Gemini fingerprint), not the deterministic passes — would point toward Day 6 (non-GPT fingerprint-breaker) sooner than planned.
 
 ### [Template for future sessions]
 - **Date:** YYYY-MM-DD
