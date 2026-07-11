@@ -72,20 +72,35 @@ function getSentences(para: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-export function splitIntoVariableChunks(text: string): string[] {
+export interface ChunkResult {
+  chunks: string[];
+  // isNewParagraph[i] — true when chunks[i] starts a genuinely new
+  // original paragraph and should be rejoined with "\n\n"; false when it's
+  // a sub-split of the SAME long paragraph and should be rejoined with a
+  // single space. Without this, long paragraphs (>3 sentences) that get
+  // divided into multiple LLM chunks were rejoined with "\n\n" by
+  // humanize(), fabricating paragraph breaks mid-sentence/mid-paragraph —
+  // confirmed producing orphaned lowercase fragments in output
+  // (2026-07-11).
+  isNewParagraph: boolean[];
+}
+
+export function splitIntoVariableChunks(text: string): ChunkResult {
   const paragraphs = text
     .split(/\n\s*\n/)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
 
   const raw: string[] = [];
+  const rawParaIds: number[] = [];
 
-  for (const para of paragraphs) {
+  paragraphs.forEach((para, paraIdx) => {
     const sentences = getSentences(para);
 
     if (sentences.length <= 3) {
       raw.push(para);
-      continue;
+      rawParaIds.push(paraIdx);
+      return;
     }
 
     let i = 0;
@@ -94,26 +109,50 @@ export function splitIntoVariableChunks(text: string): string[] {
       const groupSize = wordCount > 22 ? 2 : i % 2 === 0 ? 3 : 2;
       const end = Math.min(i + groupSize, sentences.length);
       raw.push(sentences.slice(i, end).join(" "));
+      rawParaIds.push(paraIdx);
       i = end;
     }
-  }
+  });
 
   const chunks: string[] = [];
-  for (const chunk of raw) {
-    if (chunks.length > 0 && chunk.split(/\s+/).length < 15) {
+  const chunkParaIds: number[] = [];
+  for (let idx = 0; idx < raw.length; idx++) {
+    const chunk = raw[idx];
+    const paraId = rawParaIds[idx];
+    // Only fold a short trailing chunk into the previous one when they
+    // belong to the SAME original paragraph — folding across a real
+    // paragraph boundary would silently merge two paragraphs into one.
+    if (
+      chunks.length > 0 &&
+      chunk.split(/\s+/).length < 15 &&
+      chunkParaIds[chunkParaIds.length - 1] === paraId
+    ) {
       chunks[chunks.length - 1] += " " + chunk;
     } else {
       chunks.push(chunk);
+      chunkParaIds.push(paraId);
     }
   }
 
+  let finalChunks = chunks;
+  let finalParaIds = chunkParaIds;
   if (chunks.length > 8) {
     const head = chunks.slice(0, 7);
+    const headIds = chunkParaIds.slice(0, 7);
     const tail = chunks.slice(7).join(" ");
-    return [...head, tail];
+    finalChunks = [...head, tail];
+    finalParaIds = [...headIds, chunkParaIds[7]];
   }
 
-  return chunks.length > 0 ? chunks : [text.trim()];
+  if (finalChunks.length === 0) {
+    return { chunks: [text.trim()], isNewParagraph: [true] };
+  }
+
+  const isNewParagraph = finalChunks.map(
+    (_, i) => i === 0 || finalParaIds[i] !== finalParaIds[i - 1]
+  );
+
+  return { chunks: finalChunks, isNewParagraph };
 }
 
 // ─── Sentence Classification ──────────────────────────────────────────────────
@@ -651,8 +690,13 @@ export function patternKillerPass(text: string): string {
   result = result.replace(/\s+—\s+along\s+with\s+/gi, ", and ");
 
   // 3d. "However," at sentence start → drop. Weak contrast signal that
-  // reads as textbook topic-sentence cadence.
-  result = result.replace(/(^|\.\s+|\?\s+|!\s+|\n)However,\s+/g, "$1");
+  // reads as textbook topic-sentence cadence. Re-capitalize the word that's
+  // now at sentence-start — dropping "However, " left a lowercase opener
+  // ("the path toward..."), a confirmed grammar defect (2026-07-11).
+  result = result.replace(
+    /(^|\.\s+|\?\s+|!\s+|\n)However,\s+([a-z])/g,
+    (_m, lead: string, ch: string) => lead + ch.toUpperCase()
+  );
 
   // 4. Topic-sentence template: "is one of X's biggest/largest/greatest/most N"
   //    "is one of AI's biggest benefits" → "is a top AI benefit"
@@ -873,48 +917,25 @@ function findClauseBoundaryCommas(sentence: string): number[] {
 }
 
 export function structuralPerplexityInjector(text: string, register: SourceRegister): string {
-  // DISABLED Modes A (parenthetical insertion) and B (em-dash list break):
-  // both were adding identifiable lagom-humanizer fingerprints that detectors
-  // now flag. Examples observed in the wild:
+  // DISABLED Modes A (parenthetical insertion), B (em-dash list break), and
+  // now C (comma → semicolon at clause boundary): all three were adding
+  // identifiable lagom-humanizer fingerprints that detectors now flag.
+  // Examples observed in the wild:
   //   A → "(admittedly)", "(broadly speaking)", "(with some exceptions)"
   //   B → "fair and effective — along with truly engaging for everyone"
-  // Only Mode C (comma → semicolon at clause boundary) survives — semicolons
-  // are legitimate human punctuation and haven't been flagged.
+  //   C → "...must-have; which will take many countries..." and
+  //       "...grading; and giving student comments..." — the regex matched
+  //       commas before dependent-clause subordinators (which/because/etc.)
+  //       and mid-list conjunctions, so the semicolon frequently landed
+  //       before a clause that isn't independent — a grammar error, and a
+  //       stronger AI-paraphrase signal than the plain comma it replaced.
+  //       Confirmed via QuillBot flagging both instances directly (2026-07-11).
+  // This function is now a no-op, kept for signature compatibility with
+  // finishHumanizedText() and lib/deep-humanizer.ts imports.
   void register; void FORMAL_PARENS; void CASUAL_PARENS; void LIST_RE;
-  const paragraphs = text.split(/\n\s*\n/);
-  let totalMods = 0;
-
-  const result = paragraphs.map((para) => {
-    if (totalMods >= 4) return para;
-    const sentences = getSentences(para);
-    if (sentences.length < 2) return para;
-    let paraModCount = 0;
-
-    const processed = sentences.map((sentence) => {
-      if (paraModCount >= 1) return sentence;
-      const words = sentence.split(/\s+/).length;
-
-      // C: Comma → semicolon ONLY at a clause boundary comma.
-      if (words >= 20) {
-        const boundaries = findClauseBoundaryCommas(sentence);
-        const candidate = boundaries.find(b => b > 15 && b < sentence.length - 15);
-        if (candidate !== undefined) {
-          paraModCount++; totalMods++;
-          return `${sentence.slice(0, candidate)};${sentence.slice(candidate + 1)}`;
-        }
-      }
-
-      return sentence;
-    });
-
-    return processed.join(" ");
-  });
-
-  return result.join("\n\n");
+  void CLAUSE_BOUNDARY_RE; void findClauseBoundaryCommas;
+  return text;
 }
-// Silence unused-symbol warning; the regex constant is retained for future
-// callers but the per-call function findClauseBoundaryCommas is what runs.
-void CLAUSE_BOUNDARY_RE;
 
 // ─── Inter-Paragraph Divergence ──────────────────────────────────────────────
 // Swaps a repeated content word in adjacent paragraphs with a lateral synonym.
@@ -1012,7 +1033,15 @@ export function burstinessInjector(text: string, register: SourceRegister): stri
       // become the start of a new sentence after the comma is promoted.
       const coordRe = /,\s+(and|but|or|yet|so)\s+/i;
       const m = coordRe.exec(target);
-      if (m && m.index > 20 && m.index < target.length - 20) {
+      // Guard: skip if any comma precedes the match — that means the matched
+      // comma is the LAST item of an Oxford-comma list ("X, Y, and Z"), not
+      // a genuine two-independent-clause boundary. Splitting there produced
+      // a bare fragment ("...technology, green hydrogen production.") plus
+      // an orphaned continuation ("Smart grid management systems are
+      // proving...") — confirmed via detector-flagged output (2026-07-11).
+      // A true "clause A, and clause B" sentence has exactly one comma.
+      const hasEarlierComma = m ? target.slice(0, m.index).includes(",") : false;
+      if (m && !hasEarlierComma && m.index > 20 && m.index < target.length - 20) {
         const commaPos = m.index;
         const afterCommaStart = commaPos + m[0].length;
         const first = target.slice(0, commaPos).trimEnd() + ".";
@@ -1102,8 +1131,17 @@ function emDashInjector(text: string, register: SourceRegister): string {
 // Detects duplicate sentence-opening words within a paragraph, swaps the
 // second occurrence from a curated prefix table. Max 2 swaps per paragraph.
 
+// Number-agreement note: "the" can precede a singular OR plural noun, but
+// "Each"/"That" only agree with a singular noun ("Each aspect" is fine,
+// "Each aspects" is not). Blindly swapping "The" → "Each"/"That" produced
+// confirmed grammar errors ("Each relational and emotional aspects...",
+// 2026-07-11) whenever the underlying noun was plural. Same problem for
+// "both", which always precedes a plural noun — "Each"/"Either" there is
+// wrong 100% of the time. Both entries now use only number-agnostic
+// alternatives (determiners/phrases that work regardless of the following
+// noun's number) instead of singular-only substitutes.
 const OPENER_SWAPS: Record<string, string[]> = {
-  "this": ["That","The","It"], "the": ["Its","That","Each"],
+  "this": ["That","The","It"], "the": ["Its","The same","Its own"],
   "it": ["This","That","The result"], "these": ["Such","Those","The"],
   "there": ["Here","That said,","In practice,"], "that": ["This","It","Such"],
   "they": ["Both","Each of them","Those"], "we": ["Our","In doing so,","The team"],
@@ -1115,7 +1153,7 @@ const OPENER_SWAPS: Record<string, string[]> = {
   "most": ["Many","The majority of","A large portion of"],
   "many": ["Several","A number of","Numerous"],
   "some": ["A few","Certain","Several"], "each": ["Every","Any given","Individual"],
-  "both": ["Each","Either","The two"],
+  "both": ["The two","Together, the"],
 };
 
 // Demonstrative-class openers — "This", "These", "Those", "That", "It" all
@@ -1194,8 +1232,22 @@ function looksLikeFragment(s: string): boolean {
   return !hasVerb;
 }
 
+// Several upstream passes (phrase-replacement tables in zeroGPTNgramBreaker,
+// the "However," strip, etc.) substitute lowercase text without checking
+// whether the match landed at a sentence start, producing artifacts like
+// "...power generation. notably, continued investment...". getSentences()
+// requires an uppercase letter after the split point to even recognize a
+// sentence boundary, so these never reach the fragment-merge logic below —
+// they need to be capitalized directly. Confirmed in output (2026-07-11).
+function capitalizeSentenceStarts(text: string): string {
+  return text.replace(
+    /(^|[.!?]\s+|\n\s*\n)([a-z])/g,
+    (_m, lead: string, ch: string) => lead + ch.toUpperCase()
+  );
+}
+
 export function grammarAndDedupPass(text: string): string {
-  const paragraphs = text.split(/\n\s*\n/);
+  const paragraphs = capitalizeSentenceStarts(text).split(/\n\s*\n/);
   const seenGlobal = new Set<string>();
 
   const cleaned = paragraphs.map((para) => {
@@ -1533,14 +1585,20 @@ export async function humanize(
   // demoted to a deep-mode-only weapon (see roundTripHumanize, still exported
   // for use by lib/deep-humanizer.ts nuclear-reset path).
   try {
-    const chunks = splitIntoVariableChunks(truncated);
+    const { chunks, isNewParagraph } = splitIntoVariableChunks(truncated);
 
     // Pass 1: Structural rewrite (parallel per chunk)
     const structural = await structuralPass(chunks, contentType);
 
     // Pass 2: Semantic naturalness (parallel per chunk)
     const semantic = await semanticPass(structural, contentType);
-    const merged = semantic.join("\n\n");
+    // Rejoin using paragraph membership, not a blanket "\n\n" — chunks that
+    // are sub-splits of the same long paragraph get a single space instead,
+    // so they don't get fabricated into standalone paragraphs.
+    const merged = semantic.reduce(
+      (acc, piece, i) => (i === 0 ? piece : acc + (isNewParagraph[i] ? "\n\n" : " ") + piece),
+      ""
+    );
 
     // Tier 0 — NVIDIA Fingerprint Break: run merged Gemini output through a
     // completely different model family (NVIDIA NIM free API) to shatter the
